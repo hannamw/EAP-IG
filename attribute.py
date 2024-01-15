@@ -50,7 +50,7 @@ def attribute(model: HookedTransformer, graph: Graph, clean_inputs:List[str], co
             try:
                 child_gradient = clean_bwd_cache[edge.hook + "_grad"][edge.index]
 
-                score = (parent_activation_difference * child_gradient).mean(0).sum().cpu().item()
+                score = (parent_activation_difference * child_gradient).sum().cpu().item()
                 edge.score = score
             except RuntimeError as e:
                 print(f'Failed on {edge}')
@@ -72,6 +72,7 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
     if isinstance(corrupted_inputs[0], str):
         corrupted_inputs = [corrupted_inputs]
 
+    total_items = sum(len(c) for c in clean_inputs)
     for clean, corrupted, label in zip(clean_inputs, corrupted_inputs, labels):
         batch_size = len(clean)
         corrupted_fwd_cache, clean_fwd_cache, clean_bwd_cache = get_activations(model, graph, clean, corrupted, metric, label)
@@ -123,19 +124,18 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
                 else:
                     raise RuntimeError(f'Encountered invalid node: {node} of type {type(node)}')
 
-        input_child_score_matrix += einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> pos component')
+        input_child_score_matrix += einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> pos component') * batch_size / total_items
 
-        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos end layer head qkv hidden -> pos end layer head qkv') 
+        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos end layer head qkv hidden -> pos end layer head qkv') * batch_size / total_items
 
-        parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> pos layer head component') 
+        parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> pos layer head component') * batch_size / total_items
 
-        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> pos end layer1 head1 layer2 head2 qkv') 
+        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> pos end layer1 head1 layer2 head2 qkv') * batch_size / total_items
 
-    total_items = sum(len(clean) for clean in clean_inputs)
-    input_child_score_matrix /= total_items #* len(clean_inputs)
-    input_attn_score_matrix /= total_items #* len(clean_inputs)
-    parent_child_score_matrix /= total_items #* len(clean_inputs)
-    parent_attn_score_matrix /= total_items #* len(clean_inputs)
+    # input_child_score_matrix /= total_items #* len(clean_inputs)
+    # input_attn_score_matrix /= total_items #* len(clean_inputs)
+    # parent_child_score_matrix /= total_items #* len(clean_inputs)
+    # parent_attn_score_matrix /= total_items #* len(clean_inputs)
     
     if not graph.use_pos:
         input_child_score_matrix = input_child_score_matrix.sum(0)
