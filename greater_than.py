@@ -9,8 +9,9 @@ import matplotlib.pyplot as plt
 
 from greater_than_dataset import get_prob_diff, YearDataset, get_valid_years
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
-from attribute import attribute, attribute_vectorized, get_activations
+from attribute import attribute_vectorized
 
+from attribute_vectorized import attribute_vectorized as ave
 #%%
 model_name = 'EleutherAI/pythia-160m'
 model = HookedTransformer.from_pretrained(model_name)
@@ -48,4 +49,14 @@ g.prune_dead_nodes(prune_childless=True, prune_parentless=False)
 gz = g.to_graphviz()
 gz.draw('graph_vectorized.png', prog='dot')
 
+# %%
+# Instantiate a graph with a model and the length of the data
+g2 = Graph.from_model_positional(model, input_length)
+# Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
+ave(model, g2, clean, corrupted, prob_diff, labels)
+# Apply a threshold
+g2.apply_threshold(0.011, absolute=False)
+g2.prune_dead_nodes(prune_childless=True, prune_parentless=False)
+gz2 = g2.to_graphviz()
+gz2.draw('graph_vectorized2.png', prog='dot')
 # %%
