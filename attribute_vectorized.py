@@ -8,16 +8,18 @@ from einops import rearrange, einsum
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
-def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrupted_inputs, metric: Callable[[Tensor], Tensor], labels):
+def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
     batch_size = len(clean_inputs)
-    input_activations_clean = torch.zeros((batch_size, graph.n_pos, model.cfg.d_model), device='cuda')
-    parent_activations_clean = torch.zeros((batch_size, graph.n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
-    
-    input_activations_corrupted = torch.zeros((batch_size, graph.n_pos, model.cfg.d_model), device='cuda')
-    parent_activations_corrupted = torch.zeros((batch_size, graph.n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
+    n_pos = 1 + len(model.tokenizer(clean_inputs[0])[0])
 
-    child_gradients = torch.zeros((batch_size, graph.n_pos, model.cfg.n_layers + 1, model.cfg.d_model), device='cuda')
-    attn_child_gradients = torch.zeros((batch_size, graph.n_pos, graph.n_pos, model.cfg.n_layers, model.cfg.n_heads, len('qkv'), model.cfg.d_model), device='cuda')
+    input_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
+    parent_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
+    
+    input_activations_corrupted = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
+    parent_activations_corrupted = torch.zeros((batch_size, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
+
+    child_gradients = torch.zeros((batch_size, n_pos, model.cfg.n_layers + 1, model.cfg.d_model), device='cuda')
+    attn_child_gradients = torch.zeros((batch_size, n_pos, n_pos, model.cfg.n_layers, model.cfg.n_heads, len('qkv'), model.cfg.d_model), device='cuda')
 
     processed_nodes = set()
     processed_attn_layers = set()
@@ -34,7 +36,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrup
         return hook_fn
 
     for name, node in graph.nodes.items():
-        name_non_positional = '_'.join(name.split('_')[:-1])
+        name_non_positional = name if graph.n_pos is None else  '_'.join(name.split('_')[:-1])
         if name_non_positional in processed_nodes:
             continue
         processed_nodes.add(name_non_positional)
@@ -54,8 +56,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrup
             fwd_hooks_clean.append((node.out_hook, make_hook(parent_activations_clean, (slice(None), slice(None), node.layer, slice(0, model.cfg.n_layers)))))
             fwd_hooks_corrupted.append((node.out_hook, make_hook(parent_activations_corrupted, (slice(None), slice(None), node.layer, slice(0, model.cfg.n_layers)))))
             for i, letter in enumerate('qkv'):
-                letter_input_hook = f'blocks.{node.layer}.hook_{letter}_input' 
-                bwd_hooks.append((letter_input_hook, make_hook(attn_child_gradients, (slice(None), slice(None), slice(None), node.layer, slice(None), i), unsqueeze=True)))
+                bwd_hooks.append((node.qkv_inputs[i], make_hook(attn_child_gradients, (slice(None), slice(None), slice(None), node.layer, slice(None), i), unsqueeze=True)))
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
@@ -72,8 +73,60 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrup
 
     return input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients
             
-def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], metric: Callable[[Tensor], Tensor], labels):
+def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor]):
+    # component
+    input_child_score_matrix = torch.zeros((model.cfg.n_layers + 1), device='cuda')
+    # layer head qkv
+    input_attn_score_matrix = torch.zeros((model.cfg.n_layers, model.cfg.n_heads, len('qkv')), device='cuda')
+    # head component
+    parent_child_score_matrix = torch.zeros((model.cfg.n_layers, model.cfg.n_heads + 1, model.cfg.n_layers + 1), device='cuda')
+    # layer1 head1 layer2 head2 qkv
+    parent_attn_score_matrix = torch.zeros((model.cfg.n_layers, model.cfg.n_heads + 1, model.cfg.n_layers, model.cfg.n_heads, len('qkv')), device='cuda')
 
+    if isinstance(clean_inputs[0], str):
+        clean_inputs = [clean_inputs]
+    if isinstance(corrupted_inputs[0], str):
+        corrupted_inputs = [corrupted_inputs]
+
+    total_items = sum(len(c) for c in clean_inputs)
+    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+        batch_size = len(clean)
+        input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients = get_activations(model, graph, clean, corrupted, metric, label)
+
+        input_child_score_matrix += einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> component') * batch_size / total_items
+
+        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos end layer head qkv hidden -> end layer head qkv').sum(0) * batch_size / total_items
+
+        parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> layer head component') * batch_size / total_items
+
+        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> end layer1 head1 layer2 head2 qkv').sum(0) * batch_size / total_items
+
+    input_child_score_matrix = input_child_score_matrix.cpu().numpy()
+    input_attn_score_matrix = input_attn_score_matrix.cpu().numpy() / (model.cfg.n_heads + 1)
+    parent_child_score_matrix = parent_child_score_matrix.cpu().numpy()
+    parent_attn_score_matrix = parent_attn_score_matrix.cpu().numpy() / (model.cfg.n_heads + 1)
+
+    qkv_map = {letter:i for i, letter in enumerate('qkv')}
+
+    for edge in tqdm(graph.edges.values(), total=len(graph.edges)):
+        if isinstance(edge.parent, InputNode):
+            if isinstance(edge.child, AttentionNode):
+                edge.score = input_attn_score_matrix[edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
+            else:
+                component = edge.child.layer if isinstance(edge.child, MLPNode) else model.cfg.n_layers
+
+                edge.score = input_child_score_matrix[component]
+        else:
+            parent_head = edge.parent.head if isinstance(edge.parent, AttentionNode) else model.cfg.n_heads
+            if isinstance(edge.child, AttentionNode):
+                edge.score = parent_attn_score_matrix[edge.parent.layer, parent_head, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
+            else:
+                component = edge.child.layer if isinstance(edge.child, MLPNode) else model.cfg.n_layers
+
+                edge.score = parent_child_score_matrix[edge.parent.layer, parent_head, component]
+    return input_child_score_matrix, input_attn_score_matrix, parent_child_score_matrix, parent_attn_score_matrix
+
+def attribute_vectorized_positional(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor]):
     # pos component
     input_child_score_matrix = torch.zeros((graph.n_pos, model.cfg.n_layers + 1), device='cuda')
     # pos end layer head qkv
@@ -100,12 +153,6 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
         parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> pos layer head component') * batch_size / total_items
 
         parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> pos end layer1 head1 layer2 head2 qkv') * batch_size / total_items
-    
-    if not graph.use_pos:
-        input_child_score_matrix = input_child_score_matrix.sum(0)
-        input_attn_score_matrix = input_attn_score_matrix.sum(0).sum(0) / (model.cfg.n_heads + 1)
-        parent_child_score_matrix = parent_child_score_matrix.sum(0) 
-        parent_attn_score_matrix = parent_attn_score_matrix.sum(0).sum(0) / (model.cfg.n_heads + 1)
 
     input_child_score_matrix = input_child_score_matrix.cpu().numpy()
     input_attn_score_matrix = input_attn_score_matrix.cpu().numpy()
@@ -117,26 +164,14 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
     for edge in tqdm(graph.edges.values(), total=len(graph.edges)):
         if isinstance(edge.parent, InputNode):
             if isinstance(edge.child, AttentionNode):
-                if graph.use_pos:
-                    edge.score = input_attn_score_matrix[edge.parent.pos, edge.child.pos, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
-                else:
-                    edge.score = input_attn_score_matrix[edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
+                edge.score = input_attn_score_matrix[edge.parent.pos, edge.child.pos, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
             else:
                 component = edge.child.layer if isinstance(edge.child, MLPNode) else model.cfg.n_layers
-                if graph.use_pos:
-                    edge.score = input_child_score_matrix[edge.parent.pos, component]
-                else:
-                    edge.score = input_child_score_matrix[component]
+                edge.score = input_child_score_matrix[edge.parent.pos, component]
         else:
             parent_head = edge.parent.head if isinstance(edge.parent, AttentionNode) else model.cfg.n_heads
             if isinstance(edge.child, AttentionNode):
-                if graph.use_pos:
-                    edge.score = parent_attn_score_matrix[edge.parent.pos, edge.child.pos, edge.parent.layer, parent_head, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
-                else:
-                    edge.score = parent_attn_score_matrix[edge.parent.layer, parent_head, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
+                edge.score = parent_attn_score_matrix[edge.parent.pos, edge.child.pos, edge.parent.layer, parent_head, edge.child.layer, edge.child.head, qkv_map[edge.qkv]]
             else:
                 component = edge.child.layer if isinstance(edge.child, MLPNode) else model.cfg.n_layers
-                if graph.use_pos:
-                    edge.score = parent_child_score_matrix[edge.parent.pos, edge.parent.layer, parent_head, component]
-                else:
-                    edge.score = parent_child_score_matrix[edge.parent.layer, parent_head, component]
+                edge.score = parent_child_score_matrix[edge.parent.pos, edge.parent.layer, parent_head, component]

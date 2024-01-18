@@ -9,7 +9,7 @@ def get_year_indices(tokenizer: PreTrainedTokenizer):
     return torch.tensor([tokenizer(f'{year:02d}').input_ids[0] for year in range(100)])
 
 
-def get_prob_diff(tokenizer: PreTrainedTokenizer):
+def get_prob_diff(tokenizer: PreTrainedTokenizer, mean=True):
     year_indices = get_year_indices(tokenizer) 
     def prob_diff(logits, years):
         # Prob diff (negative, since it's a loss)
@@ -17,7 +17,9 @@ def get_prob_diff(tokenizer: PreTrainedTokenizer):
         diffs = []
         for prob, year in zip(probs, years):
             diffs.append(prob[year + 1 :].sum() - prob[: year + 1].sum())
-        return -torch.stack(diffs).mean().to('cuda')
+
+        diffs = -torch.stack(diffs).to('cuda') 
+        return diffs.mean() if mean else diffs
     return prob_diff
 
 def get_valid_years(

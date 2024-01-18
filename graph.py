@@ -25,8 +25,9 @@ class Node:
     children: Set['Node']
     child_edges: Set['Edge']
     in_graph: bool
+    qkv_inputs: Optional[List[str]]
 
-    def __init__(self, name: str, layer:int, pos:Optional[int], in_hook: List[str], out_hook: str, index: Tuple):
+    def __init__(self, name: str, layer:int, pos:Optional[int], in_hook: List[str], out_hook: str, index: Tuple, qkv_inputs: Optional[List[str]]=None):
         self.name = name
         self.layer = layer
         self.pos = slice(None) if pos is None else pos
@@ -38,6 +39,7 @@ class Node:
         self.children = set()
         self.parent_edges = set()
         self.child_edges = set()
+        self.qkv_inputs = qkv_inputs
 
     def __eq__(self, other):
         return self.name == other.name
@@ -66,7 +68,7 @@ class AttentionNode(Node):
         name = f'a{layer}.h{head}' if pos is None else f'a{layer}.h{head}_{pos}'
         self.head = head
         index = (slice(None), slice(None), head) if pos is None else (slice(None), pos, head)
-        super().__init__(name, layer, pos, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index)
+        super().__init__(name, layer, pos, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index, [f'blocks.{layer}.hook_{letter}_input' for letter in 'qkv'])
 
 class InputNode(Node):
     def __init__(self, pos:Optional[int]=None):
@@ -122,7 +124,6 @@ class Graph:
     edges: Dict[str, Edge]
     logits: List[Node]
     n_pos: Optional[int]
-    use_pos: bool
 
     def __init__(self, nodes: List[Node], edges:Dict[Node, Edge], logits=List[Node]):
         self.nodes = nodes
@@ -137,8 +138,8 @@ class Graph:
         child.parents.add(parent)
         child.parent_edges.add(edge)
 
-    def scores(self, nonzero=True):
-        return torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0]) if nonzero else \
+    def scores(self, nonzero=True, in_graph=False):
+        return torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else \
                torch.tensor([edge.score for edge in self.edges.values()])
 
     def parent_node_names(self):
@@ -184,11 +185,10 @@ class Graph:
 
 
     @classmethod
-    def from_model(cls, model: Union[HookedTransformer,HookedTransformerConfig], input_length: int):
+    def from_model(cls, model: Union[HookedTransformer,HookedTransformerConfig]):
         cfg:HookedTransformerConfig = model if isinstance(model, HookedTransformerConfig) else model.cfg
         graph = Graph({}, {}, [])
-        graph.n_pos = input_length
-        graph.use_pos = False
+        graph.n_pos = None
         input_node = InputNode()
         graph.nodes[input_node.name] = input_node
         residual_stream = [input_node]
@@ -238,7 +238,6 @@ class Graph:
         cfg:HookedTransformerConfig = model if isinstance(model, HookedTransformerConfig) else model.cfg
         graph = Graph({}, {}, [])
         graph.n_pos = input_length
-        graph.use_pos = True
         residual_stream_by_pos = []
         for pos in range(graph.n_pos):
             input_node = InputNode(pos)
