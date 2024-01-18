@@ -95,16 +95,16 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
 
         input_child_score_matrix += einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> component') * batch_size / total_items
 
-        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos end layer head qkv hidden -> end layer head qkv').sum(0) * batch_size / total_items
+        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos end layer head qkv hidden -> end layer head qkv').mean(0) * batch_size / total_items 
 
         parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> layer head component') * batch_size / total_items
 
-        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> end layer1 head1 layer2 head2 qkv').sum(0) * batch_size / total_items
+        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos end layer2 head2 qkv hidden -> end layer1 head1 layer2 head2 qkv').mean(0) * batch_size / total_items
 
     input_child_score_matrix = input_child_score_matrix.cpu().numpy()
-    input_attn_score_matrix = input_attn_score_matrix.cpu().numpy() / (model.cfg.n_heads + 1)
+    input_attn_score_matrix = input_attn_score_matrix.cpu().numpy() 
     parent_child_score_matrix = parent_child_score_matrix.cpu().numpy()
-    parent_attn_score_matrix = parent_attn_score_matrix.cpu().numpy() / (model.cfg.n_heads + 1)
+    parent_attn_score_matrix = parent_attn_score_matrix.cpu().numpy() 
 
     qkv_map = {letter:i for i, letter in enumerate('qkv')}
 
@@ -124,7 +124,6 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
                 component = edge.child.layer if isinstance(edge.child, MLPNode) else model.cfg.n_layers
 
                 edge.score = parent_child_score_matrix[edge.parent.layer, parent_head, component]
-    return input_child_score_matrix, input_attn_score_matrix, parent_child_score_matrix, parent_attn_score_matrix
 
 def attribute_vectorized_positional(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor]):
     # pos component

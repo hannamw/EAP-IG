@@ -50,6 +50,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
             
+    # and here we actually run / evaluate the model
     results = []
     for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
         with torch.inference_mode():

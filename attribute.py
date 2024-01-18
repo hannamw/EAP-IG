@@ -8,7 +8,7 @@ from einops import rearrange, einsum
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
-def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrupted_inputs, metric: Callable[[Tensor], Tensor], labels):
+def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrupted_inputs, labels,  metric: Callable[[Tensor], Tensor]):
     fwd_names = graph.parent_node_names()
     fwd_filter = lambda x: x in fwd_names
     corrupted_fwd_cache, corrupted_fwd_hooks, _ = model.get_caching_hooks(fwd_filter)
@@ -30,7 +30,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs, corrup
 
 # forward is for parent, backward is for child
 def attribute(model: HookedTransformer, graph: Graph, clean_inputs:List[str], corrupted_inputs:List[str], labels, metric: Callable[[Tensor], Tensor]):
-    corrupted_fwd_cache, clean_fwd_cache, clean_bwd_cache = get_activations(model, graph, clean_inputs, corrupted_inputs, metric, labels)
+    corrupted_fwd_cache, clean_fwd_cache, clean_bwd_cache = get_activations(model, graph, clean_inputs, corrupted_inputs, labels, metric)
     for node in tqdm(graph.nodes.values(), total=len(graph.nodes)):
         if not node.children:
             continue
@@ -75,9 +75,9 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
     parent_attn_score_matrix = torch.zeros((n_pos, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1, model.cfg.n_layers, model.cfg.n_heads, len('qkv')), device='cuda')
 
     total_items = sum(len(c) for c in clean_inputs)
-    for clean, corrupted, label in zip(clean_inputs, corrupted_inputs, labels):
+    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
         batch_size = len(clean)
-        corrupted_fwd_cache, clean_fwd_cache, clean_bwd_cache = get_activations(model, graph, clean, corrupted, metric, label)
+        corrupted_fwd_cache, clean_fwd_cache, clean_bwd_cache = get_activations(model, graph, clean, corrupted, label, metric)
 
         input_activation_differences = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
 

@@ -139,8 +139,7 @@ class Graph:
         child.parent_edges.add(edge)
 
     def scores(self, nonzero=True, in_graph=False):
-        return torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else \
-               torch.tensor([edge.score for edge in self.edges.values()])
+        return torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
 
     def parent_node_names(self):
         return {edge.parent.out_hook for edge in self.edges.values()}
@@ -302,13 +301,13 @@ class Graph:
 
     def to_graphviz(
         self,
-        colorscheme: Union[Dict, str] = "Pastel2",
+        colorscheme: str = "Pastel2",
         minimum_penwidth: float = 0.3,
         layout: str="dot",
         seed: Optional[int] = None
     ) -> pgv.AGraph:
         """
-        Colorscheme: a color for each node name, or a string corresponding to a cmapy color scheme
+        Colorscheme: a cmap colorscheme
         """
         g = pgv.AGraph(directed=True, bgcolor="white", overlap="false", splines="true", layout=layout)
 
