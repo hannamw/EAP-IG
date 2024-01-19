@@ -1,6 +1,7 @@
 from typing import List, Dict, Union, Tuple, Literal, Optional, Set
 from collections import defaultdict
 from pathlib import Path 
+import json
 
 import torch
 from transformer_lens import HookedTransformer, HookedTransformerConfig
@@ -124,6 +125,7 @@ class Graph:
     edges: Dict[str, Edge]
     logits: List[Node]
     n_pos: Optional[int]
+    cfg: HookedTransformerConfig
 
     def __init__(self, nodes: List[Node], edges:Dict[Node, Edge], logits=List[Node]):
         self.nodes = nodes
@@ -184,24 +186,32 @@ class Graph:
 
 
     @classmethod
-    def from_model(cls, model: Union[HookedTransformer,HookedTransformerConfig]):
-        cfg:HookedTransformerConfig = model if isinstance(model, HookedTransformerConfig) else model.cfg
+    def from_model(cls, model_or_config: Union[HookedTransformer,HookedTransformerConfig, Dict]):
         graph = Graph({}, {}, [])
+        if isinstance(model_or_config, HookedTransformer):
+            cfg = model_or_config.cfg
+            graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
+        elif isinstance(model_or_config, HookedTransformerConfig):
+            cfg = model_or_config
+            graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
+        else:
+            graph.cfg = model_or_config
+        
         graph.n_pos = None
         input_node = InputNode()
         graph.nodes[input_node.name] = input_node
         residual_stream = [input_node]
 
-        for layer in range(cfg.n_layers):
+        for layer in range(graph.cfg['n_layers']):
             # at last layer, make sure only the lastmost components occur (maybe not necessary)
-            attn_nodes = [AttentionNode(layer, head) for head in range(cfg.n_heads)]
+            attn_nodes = [AttentionNode(layer, head) for head in range(graph.cfg['n_heads'])]
             mlp_node = MLPNode(layer)
             
             for attn_node in attn_nodes: 
                 graph.nodes[attn_node.name] = attn_node 
             graph.nodes[mlp_node.name] = mlp_node     
                                     
-            if cfg.parallel_attn_mlp:
+            if graph.cfg['parallel_attn_mlp']:
                 for node in residual_stream:
                     for attn_node in attn_nodes:          
                         for letter in 'qkv':           
@@ -222,7 +232,7 @@ class Graph:
                     graph.add_edge(node, mlp_node)
                 residual_stream.append(mlp_node)
                         
-        logit_node = LogitNode(cfg.n_layers)
+        logit_node = LogitNode(graph.cfg['n_layers'])
         for node in residual_stream:
             graph.add_edge(node, logit_node)
             
@@ -233,9 +243,17 @@ class Graph:
 
 
     @classmethod
-    def from_model_positional(cls, model: Union[HookedTransformer,HookedTransformerConfig], input_length:int):
-        cfg:HookedTransformerConfig = model if isinstance(model, HookedTransformerConfig) else model.cfg
+    def from_model_positional(cls, model_or_config: Union[HookedTransformer,HookedTransformerConfig, Dict], input_length:int):
         graph = Graph({}, {}, [])
+        if isinstance(model_or_config, HookedTransformer):
+            cfg = model_or_config.cfg
+            graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
+        elif isinstance(model_or_config, HookedTransformerConfig):
+            cfg = model_or_config
+            graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
+        else:
+            graph.cfg = model_or_config
+
         graph.n_pos = input_length
         residual_stream_by_pos = []
         for pos in range(graph.n_pos):
@@ -243,9 +261,9 @@ class Graph:
             graph.nodes[input_node.name] = input_node 
             residual_stream_by_pos.append([input_node])
 
-        for layer in range(cfg.n_layers):   
+        for layer in range(graph.cfg['n_layers']):
             # first generate and add nodes in the right order   
-            attn_nodes_by_pos = [[AttentionNode(layer, head, pos) for head in range(cfg.n_heads)] for pos in range(graph.n_pos)]  
+            attn_nodes_by_pos = [[AttentionNode(layer, head, pos) for head in range(graph.cfg['n_heads'])] for pos in range(graph.n_pos)]  
             mlp_node_by_pos = [MLPNode(layer, pos) for pos in range(graph.n_pos)]     
             for attn_nodes, mlp_node in zip(attn_nodes_by_pos, mlp_node_by_pos):
                 for attn_node in attn_nodes:
@@ -257,7 +275,7 @@ class Graph:
                 attn_nodes = attn_nodes_by_pos[pos]
                 mlp_node = mlp_node_by_pos[pos]
 
-                if cfg.parallel_attn_mlp:
+                if graph.cfg['parallel_attn_mlp']:
                     for node in residual_stream_by_pos[pos]:
                         graph.add_edge(node, mlp_node)
                         for attn_node in attn_nodes:
@@ -289,7 +307,7 @@ class Graph:
 
         logits = []
         for pos in range(graph.n_pos):
-            logit_node = LogitNode(cfg.n_layers, pos)
+            logit_node = LogitNode(graph.cfg['n_layers'], pos)
             graph.nodes[logit_node.name] = logit_node
             logits.append(logit_node)
             for node in residual_stream_by_pos[pos]:
@@ -298,6 +316,43 @@ class Graph:
         graph.logits = logits 
 
         return graph
+    
+    def to_json(self, filename):
+        # non serializable info
+        d = {'cfg':self.cfg, 'nodes': {name: node.in_graph for name, node in self.nodes.items()}, 'edges':{name: {'score': float(edge.score), 'in_graph':edge.in_graph} for name, edge in self.edges.items()}, 'n_pos':self.n_pos}
+        with open(filename, 'w') as f:
+            json.dump(d, f)
+
+    @classmethod
+    def from_json(cls, filename):
+        with open(filename, 'r') as f:
+            d = json.load(f)
+        if d['n_pos'] is None:
+            g = Graph.from_model(d['cfg'])
+        else:
+            g = Graph.from_model_positional(d['cfg'], d['n_pos'])
+        for name, in_graph in d['nodes'].items():
+            g.nodes[name].in_graph = in_graph
+        
+        for name, info in d['edges'].items():
+            g.edges[name].score = info['score']
+            g.edges[name].in_graph = info['in_graph']
+
+        return g
+    
+    def __eq__(self, other):
+        keys_equal = (set(self.nodes.keys()) == set(other.nodes.keys())) and (set(self.edges.keys()) == set(other.edges.keys()))
+        if not keys_equal:
+            return False
+        
+        for name, node in self.nodes.items():
+            if node.in_graph != other.nodes[name].in_graph:
+                return False 
+            
+        for name, edge in self.edges.items():
+            if (edge.in_graph != other.edges[name].in_graph) or not np.allclose(edge.score, other.edges[name].score):
+                return False
+        return True
 
     def to_graphviz(
         self,
