@@ -55,7 +55,7 @@ def kl_div(clean_logits, corrupted_logits, input_length, labels, mean=True, flip
 # Instantiate a graph with a model
 g = Graph.from_model(model)
 # Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
-attribute_vectorized(model, g, clean, corrupted, labels, kl_div)
+attribute_vectorized(model, g, clean, corrupted, labels, lambda *args: -1 * kl_div(*args))
 
 #%%
 # Apply a threshold
