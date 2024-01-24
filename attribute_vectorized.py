@@ -10,8 +10,10 @@ from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
     batch_size = len(clean_inputs)
-    n_pos = 1 + len(model.tokenizer(clean_inputs[0])[0])
-
+    tokenized = model.tokenizer(clean_inputs, padding='longest', return_tensors='pt', add_special_tokens=True)
+    n_pos = 1 + tokenized.attention_mask.size(1)
+    input_lengths = 1 + tokenized.attention_mask.sum(1)
+    
     input_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
     parent_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
     
@@ -32,7 +34,12 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
             acts = activations.detach()
             if unsqueeze:
                 acts = acts.unsqueeze(2)
-            t[index] = acts
+            try:
+                t[index] = acts
+            except RuntimeError as e:
+                print(hook)
+                print(t.size(), acts.size())
+                raise e
         return hook_fn
 
     for name, node in graph.nodes.items():
@@ -61,11 +68,14 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
     with model.hooks(fwd_hooks=fwd_hooks_corrupted):
-        _ = model(corrupted_inputs)
+        bad_logits = model(corrupted_inputs)
 
     with model.hooks(fwd_hooks=fwd_hooks_clean, bwd_hooks=bwd_hooks):
         logits = model(clean_inputs)
-        metric_value = metric(logits, labels)
+        #print(clean_inputs, corrupted_inputs)
+        #print(logits.size(), bad_logits.size())
+        #print(input_lengths)
+        metric_value = metric(logits, bad_logits, input_lengths, labels)
         metric_value.backward()
 
         input_activation_differences = input_activations_corrupted - input_activations_clean
