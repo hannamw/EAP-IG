@@ -10,9 +10,9 @@ import matplotlib.pyplot as plt
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
-from attribute_vectorized import attribute_vectorized, get_npos_input_lengths
+from attribute_vectorized import attribute_vectorized 
 #%%
-model_name = 'gpt2'
+model_name = 'gpt2-xl'
 model_name_noslash = model_name.split('/')[-1]
 model = HookedTransformer.from_pretrained(model_name)
 model.cfg.use_split_qkv_input = True
@@ -50,8 +50,7 @@ def prob_diff(clean_logits, corrupted_logits, input_length, labels, mean=True):
 
     results = []
     for i, (ls,corrupted_ls) in enumerate(labels):
-        r = clean_probs[i][ls.to(clean_probs.device)].sum() - clean_probs[i][corrupted_ls.to(clean_probs.device)].sum()
-        results.append(r)
+        clean_probs[i][ls.to(clean_probs.device)].sum() - clean_probs[i][corrupted_ls.to(clean_probs.device)].sum()
     results = torch.stack(results)
     return results.mean() if mean else results
 # %%
@@ -61,8 +60,7 @@ g = Graph.from_model(model)
 attribute_vectorized(model, g, clean, corrupted, labels, prob_diff)
 #%%
 # Apply a threshold
-g.apply_threshold(0.002, absolute=False)
-g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
+g.apply_threshold(0.011, absolute=False)
+g.prune_dead_nodes(prune_childless=True, prune_parentless=False)
 gz = g.to_graphviz()
-gz.draw(f'hypernymy_graph_{model_name_noslash}.png', prog='dot')
-# %%
+gz.draw(f'graph_hypernymy_{model_name_noslash}.png', prog='dot')
