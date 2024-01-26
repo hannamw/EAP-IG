@@ -8,12 +8,16 @@ from einops import rearrange, einsum
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
-def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
-    batch_size = len(clean_inputs)
-    tokenized = model.tokenizer(clean_inputs, padding='longest', return_tensors='pt', add_special_tokens=True)
+def get_npos_input_lengths(model, inputs):
+    tokenized = model.tokenizer(inputs, padding='longest', return_tensors='pt', add_special_tokens=True)
     n_pos = 1 + tokenized.attention_mask.size(1)
     input_lengths = 1 + tokenized.attention_mask.sum(1)
-    
+    return n_pos, input_lengths
+
+def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
+    batch_size = len(clean_inputs)
+    n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
+
     input_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
     parent_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
     
@@ -37,7 +41,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
             try:
                 t[index] = acts
             except RuntimeError as e:
-                print(hook)
+                print(hook.name)
                 print(t.size(), acts.size())
                 raise e
         return hook_fn
