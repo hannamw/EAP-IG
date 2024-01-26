@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
-from attribute_vectorized import attribute_vectorized 
+from attribute_vectorized import attribute_vectorized, get_npos_input_lengths
 #%%
 model_name = 'gpt2'
 model_name_noslash = model_name.split('/')[-1]
@@ -50,7 +50,8 @@ def prob_diff(clean_logits, corrupted_logits, input_length, labels, mean=True):
 
     results = []
     for i, (ls,corrupted_ls) in enumerate(labels):
-        clean_probs[i][ls.to(clean_probs.device)].sum() - clean_probs[i][corrupted_ls.to(clean_probs.device)].sum()
+        r = clean_probs[i][ls.to(clean_probs.device)].sum() - clean_probs[i][corrupted_ls.to(clean_probs.device)].sum()
+        results.append(r)
     results = torch.stack(results)
     return results.mean() if mean else results
 # %%
@@ -58,8 +59,10 @@ def prob_diff(clean_logits, corrupted_logits, input_length, labels, mean=True):
 g = Graph.from_model(model)
 # Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
 attribute_vectorized(model, g, clean, corrupted, labels, prob_diff)
+#%%
 # Apply a threshold
-g.apply_threshold(0.011, absolute=False)
-g.prune_dead_nodes(prune_childless=True, prune_parentless=False)
+g.apply_threshold(0.002, absolute=False)
+g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 gz = g.to_graphviz()
-gz.draw('graph.png', prog='dot')
+gz.draw(f'hypernymy_graph_{model_name_noslash}.png', prog='dot')
+# %%
