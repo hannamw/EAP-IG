@@ -140,8 +140,9 @@ class Graph:
         child.parents.add(parent)
         child.parent_edges.add(edge)
 
-    def scores(self, nonzero=True, in_graph=False):
-        return torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
+    def scores(self, nonzero=True, in_graph=False, sort=False):
+        s = torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
+        return torch.sort(s).values if sort else s
 
     def parent_node_names(self):
         return {edge.parent.out_hook for edge in self.edges.values()}

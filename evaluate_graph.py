@@ -53,14 +53,44 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
     # and here we actually run / evaluate the model
     results = []
     for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+        tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
+        input_lengths = 1 + tokenized.attention_mask.sum(1)
         with torch.inference_mode():
             with model.hooks(corrupted_fwd_hooks):
-                _ = model(corrupted)
+                corrupted_logits = model(corrupted)
 
             with model.hooks(mixed_fwd_hooks + input_construction_hooks):
                 logits = model(clean)
 
-        r = metric(logits, label).cpu()
+        r = metric(logits, corrupted_logits, input_lengths, label).cpu()
+        if len(r.size()) == 0:
+            r = r.unsqueeze(0)
+        results.append(r)
+
+    return torch.cat(results)
+
+
+def evaluate_kl(model: HookedTransformer, inputs, target_inputs):
+    results = []
+    for inp, target in tqdm(zip(inputs, target_inputs), total=len(inputs)):
+        
+        batch_size = len(inp)
+        tokenized = model.tokenizer(inp, padding='longest', return_tensors='pt', add_special_tokens=True)
+        input_length = 1 + tokenized.attention_mask.sum(1)
+        
+        with torch.inference_mode():
+            target_logits = model(target)
+            logits = model(inp)
+
+        idx = torch.arange(batch_size, device=logits.device)
+
+        logits = logits[idx, input_length - 1]
+        target_logits = target_logits[idx, input_length - 1]
+
+        logprobs = torch.log_softmax(logits, dim=-1)
+        target_logprobs = torch.log_softmax(target_logits, dim=-1)
+
+        r = torch.nn.functional.kl_div(logprobs, target_logprobs, log_target=True, reduction='mean')
         if len(r.size()) == 0:
             r = r.unsqueeze(0)
         results.append(r)

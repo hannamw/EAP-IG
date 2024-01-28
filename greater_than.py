@@ -12,7 +12,8 @@ from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 from attribute_vectorized import attribute_vectorized 
 #%%
-model_name = 'EleutherAI/pythia-160m'
+model_name = 'gpt2'
+model_name_noslash = model_name.split('/')[-1]
 model = HookedTransformer.from_pretrained(model_name)
 model.cfg.use_split_qkv_input = True
 model.cfg.use_attn_result = True
@@ -40,9 +41,11 @@ prob_diff = get_prob_diff(model.tokenizer)
 # Instantiate a graph with a model
 g = Graph.from_model(model)
 # Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
-attribute_vectorized(model, g, clean, corrupted, labels, prob_diff)
+attribute_vectorized(model, g, clean, corrupted, labels, lambda logits,corrupted_logits,input_lengths,labels: prob_diff(logits, labels))
+#%%
 # Apply a threshold
 g.apply_threshold(0.011, absolute=False)
-g.prune_dead_nodes(prune_childless=True, prune_parentless=False)
+g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 gz = g.to_graphviz()
-gz.draw('graph.png', prog='dot')
+gz.draw(f'graph_gt_{model_name_noslash}.png', prog='dot')
+# %%
