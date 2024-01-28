@@ -73,14 +73,11 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
     with model.hooks(fwd_hooks=fwd_hooks_corrupted):
-        bad_logits = model(corrupted_inputs)
+        corrupted_logits = model(corrupted_inputs)
 
     with model.hooks(fwd_hooks=fwd_hooks_clean, bwd_hooks=bwd_hooks):
         logits = model(clean_inputs)
-        #print(clean_inputs, corrupted_inputs)
-        #print(logits.size(), bad_logits.size())
-        #print(input_lengths)
-        metric_value = metric(logits, bad_logits, input_lengths, labels)
+        metric_value = metric(logits, corrupted_logits, input_lengths, labels)
         metric_value.backward()
 
         input_activation_differences = input_activations_corrupted - input_activations_clean
