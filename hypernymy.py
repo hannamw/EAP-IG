@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 from attribute_vectorized import attribute_vectorized, get_npos_input_lengths
+from evaluate_graph import evaluate_graph
 #%%
 model_name = 'gpt2'
 model_name_noslash = model_name.split('/')[-1]
@@ -52,17 +53,30 @@ def prob_diff(clean_logits, corrupted_logits, input_length, labels, mean=True):
     for i, (ls,corrupted_ls) in enumerate(labels):
         r = clean_probs[i][ls.to(clean_probs.device)].sum() - clean_probs[i][corrupted_ls.to(clean_probs.device)].sum()
         results.append(r)
-    results = torch.stack(results)
+    results = -torch.stack(results)
     return results.mean() if mean else results
 # %%
 # Instantiate a graph with a model
 g = Graph.from_model(model)
 # Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
 attribute_vectorized(model, g, clean, corrupted, labels, prob_diff)
+scores = g.scores(sort=True)
 #%%
 # Apply a threshold
-g.apply_threshold(0.002, absolute=False)
-g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
+g.apply_threshold(0.004, absolute=False)
+g.prune_dead_nodes(prune_childless=True, prune_parentless=False)
 gz = g.to_graphviz()
-gz.draw(f'hypernymy_graph_{model_name_noslash}.png', prog='dot')
+gz.draw(f'graph_hypernymy_{model_name_noslash}.png', prog='dot')
+# %%
+g2 = Graph.from_model(model)
+
+for node in g2.nodes.values():
+    node.in_graph = True
+
+for edge in g2.edges.values():
+    edge.in_graph = True 
+    edge.score = 0.002
+# Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
+baseline = evaluate_graph(model, g2, clean, corrupted, labels, lambda *args:  -1 * prob_diff(*args, mean=False))
+print(baseline.mean())
 # %%
