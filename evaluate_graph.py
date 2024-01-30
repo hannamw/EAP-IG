@@ -69,6 +69,21 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
 
     return torch.cat(results)
 
+def evaluate_baseline(model: HookedTransformer, graph: Graph,  clean_inputs, corrupted_inputs, labels, metric: Callable[[Tensor], Tensor]):
+    results = []
+    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+        tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
+        input_lengths = 1 + tokenized.attention_mask.sum(1)
+        with torch.inference_mode():
+            corrupted_logits = model(corrupted)
+            logits = model(clean)
+        r = metric(logits, corrupted_logits, input_lengths, label).cpu()
+        if len(r.size()) == 0:
+            r = r.unsqueeze(0)
+        results.append(r)
+
+    return torch.cat(results)
+
 
 def evaluate_kl(model: HookedTransformer, inputs, target_inputs):
     results = []
