@@ -12,7 +12,6 @@ from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 from attribute_vectorized import attribute_vectorized 
 #%%
-model_name = 'EleutherAI/pythia-160m'
 model_name = 'gpt2'
 model_name_noslash = model_name.split('/')[-1]
 model = HookedTransformer.from_pretrained(model_name)
@@ -48,5 +47,5 @@ attribute_vectorized(model, g, clean, corrupted, labels, lambda logits,corrupted
 g.apply_threshold(0.011, absolute=False)
 g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 gz = g.to_graphviz()
-gz.draw(f'gt_graph_{model_name_noslash}.png', prog='dot')
+gz.draw(f'graph_gt_{model_name_noslash}.png', prog='dot')
 # %%
