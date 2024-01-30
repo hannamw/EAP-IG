@@ -13,7 +13,7 @@ from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 from attribute_vectorized import attribute_vectorized, get_npos_input_lengths
 from evaluate_graph import evaluate_graph
 #%%
-model_name = 'gpt2'
+model_name = 'gpt2-xl'
 model_name_noslash = model_name.split('/')[-1]
 model = HookedTransformer.from_pretrained(model_name)
 model.cfg.use_split_qkv_input = True
