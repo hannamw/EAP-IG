@@ -1,4 +1,4 @@
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Optional
 
 import torch
 from torch import Tensor
@@ -14,10 +14,7 @@ def get_npos_input_lengths(model, inputs):
     input_lengths = 1 + tokenized.attention_mask.sum(1)
     return n_pos, input_lengths
 
-def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
-    batch_size = len(clean_inputs)
-    n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
-
+def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:int , n_pos:int):
     input_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.d_model), device='cuda')
     parent_activations_clean = torch.zeros((batch_size, n_pos, model.cfg.n_layers, model.cfg.n_heads + 1 , model.cfg.d_model), device='cuda')
     
@@ -40,7 +37,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
         def hook_fn(activations, hook):
             acts = activations.detach()
             try:
-                t[index] = acts
+                t[index] += acts
             except RuntimeError as e:
                 print(hook.name)
                 print(t.size(), acts.size())
@@ -71,6 +68,14 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
                 bwd_hooks.append((node.qkv_inputs[i], make_hook(attn_child_gradients, (slice(None), slice(None), node.layer, slice(None), i))))
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
+        
+    return (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), (input_activations_corrupted, parent_activations_corrupted, input_activations_clean, parent_activations_clean, child_gradients, attn_child_gradients)
+
+def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels):
+    batch_size = len(clean_inputs)
+    n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
+
+    (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), (input_activations_corrupted, parent_activations_corrupted, input_activations_clean, parent_activations_clean, child_gradients, attn_child_gradients) = make_hooks_and_matrices(model, graph, batch_size, n_pos)
 
     with model.hooks(fwd_hooks=fwd_hooks_corrupted):
         corrupted_logits = model(corrupted_inputs)
@@ -80,12 +85,47 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
         metric_value = metric(logits, corrupted_logits, input_lengths, labels)
         metric_value.backward()
 
-        input_activation_differences = input_activations_corrupted - input_activations_clean
-        parent_activation_differences = parent_activations_corrupted - parent_activations_clean
+    input_activation_differences = input_activations_corrupted - input_activations_clean
+    parent_activation_differences = parent_activations_corrupted - parent_activations_clean
 
     return input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients
-            
-def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor]):
+
+def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels, steps=50):
+    batch_size = len(clean_inputs)
+    n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
+
+    (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), (input_activations_corrupted, parent_activations_corrupted, input_activations_clean, parent_activations_clean, child_gradients, attn_child_gradients) = make_hooks_and_matrices(model, graph, batch_size, n_pos)
+
+    with model.hooks(fwd_hooks=fwd_hooks_corrupted):
+        corrupted_logits = model(corrupted_inputs)
+
+    with model.hooks(fwd_hooks=fwd_hooks_clean):
+        logits = model(clean_inputs)
+
+    def input_interpolation_hook(k: int):
+        def hook_fn(activations, hook):
+            return input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
+        return hook_fn
+
+    for step in range(steps+1):
+        with model.hooks(fwd_hooks=[("blocks.0.hook_resid_pre", input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
+            logits = model(clean_inputs)
+            metric_value = metric(logits, corrupted_logits, input_lengths, labels)
+            metric_value.backward()
+
+    child_gradients = child_gradients / (steps + 1)
+    attn_child_gradients = attn_child_gradients / (steps + 1)
+
+    input_activation_differences = input_activations_corrupted - input_activations_clean
+    parent_activation_differences = parent_activations_corrupted - parent_activations_clean
+
+    return input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients
+
+allowed_aggregations = {'sum', 'mean', 'l2'}        
+def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor], aggregation='sum', integrated_gradients: Optional[int]=None):
+    if aggregation not in allowed_aggregations:
+        raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')
+
     # component
     input_child_score_matrix = torch.zeros((model.cfg.n_layers + 1), device='cuda')
     # layer head qkv
@@ -103,15 +143,31 @@ def attribute_vectorized(model: HookedTransformer, graph: Graph, clean_inputs: U
     total_items = sum(len(c) for c in clean_inputs)
     for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
         batch_size = len(clean)
-        input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients = get_activations(model, graph, clean, corrupted, metric, label)
+        
+        if integrated_gradients is None:
+            input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients = get_activations(model, graph, clean, corrupted, metric, label)
+        else:
+            assert integrated_gradients > 0, f"the integrated_gradients argument gives (positive # steps (m) for the IG method, but got {integrated_gradients}"
+            input_activation_differences, parent_activation_differences, child_gradients, attn_child_gradients = get_activations_ig(model, graph, clean, corrupted, metric, label, steps=integrated_gradients)
 
-        input_child_score_matrix += einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> component') * batch_size / total_items
-
-        input_attn_score_matrix += einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos layer head qkv hidden -> layer head qkv') * batch_size / total_items 
-
-        parent_child_score_matrix += einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> layer head component') * batch_size / total_items
-
-        parent_attn_score_matrix += einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos layer2 head2 qkv hidden -> layer1 head1 layer2 head2 qkv') * batch_size / total_items
+        if aggregation == 'sum' or aggregation == 'mean':
+            denom = 1 if aggregation == 'sum' else model.cfg.d_model
+            input_child_scores = einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> component') / denom
+            input_attn_scores = einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos layer head qkv hidden -> layer head qkv') / denom
+            parent_child_scores = einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> layer head component') / denom
+            parent_attn_scores = einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos layer2 head2 qkv hidden -> layer1 head1 layer2 head2 qkv') / denom
+        elif aggregation == 'l2':
+            input_child_scores = torch.linalg.vector_norm(einsum(input_activation_differences, child_gradients, 'batch pos hidden, batch pos component hidden -> component hidden'), ord=2, dim=-1)
+            input_attn_scores = torch.linalg.vector_norm(einsum(input_activation_differences, attn_child_gradients, 'batch pos hidden, batch pos layer head qkv hidden -> layer head qkv hidden'), ord=2, dim=-1)
+            parent_child_scores = torch.linalg.vector_norm(einsum(parent_activation_differences, child_gradients, 'batch pos layer head hidden, batch pos component hidden -> layer head component hidden'), ord=2, dim=-1)
+            parent_attn_scores = torch.linalg.vector_norm(einsum(parent_activation_differences, attn_child_gradients, 'batch pos layer1 head1 hidden, batch pos layer2 head2 qkv hidden -> layer1 head1 layer2 head2 qkv hidden'), ord=2, dim=-1)
+        else:
+            raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')
+        
+        input_child_score_matrix += input_child_scores * batch_size / total_items
+        input_attn_score_matrix += input_attn_scores * batch_size / total_items 
+        parent_child_score_matrix += parent_child_scores * batch_size / total_items
+        parent_attn_score_matrix += parent_attn_scores * batch_size / total_items
 
     input_child_score_matrix = input_child_score_matrix.cpu().numpy()
     input_attn_score_matrix = input_attn_score_matrix.cpu().numpy() 
