@@ -96,25 +96,28 @@ def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: Lis
 
     (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), (input_activations_corrupted, parent_activations_corrupted, input_activations_clean, parent_activations_clean, child_gradients, attn_child_gradients) = make_hooks_and_matrices(model, graph, batch_size, n_pos)
 
-    with model.hooks(fwd_hooks=fwd_hooks_corrupted):
-        corrupted_logits = model(corrupted_inputs)
+    with torch.inference_mode():
+        with model.hooks(fwd_hooks=fwd_hooks_corrupted):
+            corrupted_logits = model(corrupted_inputs)
 
-    with model.hooks(fwd_hooks=fwd_hooks_clean):
-        logits = model(clean_inputs)
+        with model.hooks(fwd_hooks=fwd_hooks_clean):
+            clean_logits = model(clean_inputs)
 
     def input_interpolation_hook(k: int):
         def hook_fn(activations, hook):
             return input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
         return hook_fn
 
-    for step in range(steps+1):
+    total_steps = 0
+    for step in range(1, steps+1):
+        total_steps += 1
         with model.hooks(fwd_hooks=[("blocks.0.hook_resid_pre", input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
             logits = model(clean_inputs)
-            metric_value = metric(logits, corrupted_logits, input_lengths, labels)
+            metric_value = metric(logits, clean_logits, input_lengths, labels)
             metric_value.backward()
 
-    child_gradients = child_gradients / (steps + 1)
-    attn_child_gradients = attn_child_gradients / (steps + 1)
+    child_gradients = child_gradients / total_steps
+    attn_child_gradients = attn_child_gradients / total_steps
 
     input_activation_differences = input_activations_corrupted - input_activations_clean
     parent_activation_differences = parent_activations_corrupted - parent_activations_clean

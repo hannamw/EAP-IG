@@ -2,6 +2,7 @@ from typing import List, Dict, Union, Tuple, Literal, Optional, Set
 from collections import defaultdict
 from pathlib import Path 
 import json
+import heapq
 
 import torch
 from transformer_lens import HookedTransformer, HookedTransformerConfig
@@ -153,9 +154,55 @@ class Graph:
     def count_included_edges(self):
         return sum(edge.in_graph for edge in self.edges.values())
     
+    def count_included_nodes(self):
+        return sum(node.in_graph for node in self.nodes.values())
+
     def apply_threshold(self, threshold: float, absolute: bool):
+        threshold = float(threshold)
+        for node in self.nodes.values():
+            node.in_graph = True 
+            
         for edge in self.edges.values():
             edge.in_graph = abs(edge.score) >= threshold if absolute else edge.score >= threshold
+
+    def apply_greedy(self, n_edges, reset=True, absolute: bool=False):
+        if reset:
+            for node in self.nodes.values():
+                node.in_graph = False 
+            for edge in self.edges.values():
+                edge.in_graph = False
+            for logit in self.logits:
+                logit.in_graph = True
+
+        def abs_id(s: float):
+            return abs(s) if absolute else s
+
+        candidate_edges = sorted([edge for edge in self.edges.values() if edge.child.in_graph], key = lambda edge: abs_id(edge.score), reverse=True)
+
+        edges = heapq.merge(candidate_edges, key = lambda edge: abs_id(edge.score), reverse=True)
+        while n_edges > 0:
+            n_edges -= 1
+            top_edge = next(edges)
+            top_edge.in_graph = True
+            parent = top_edge.parent
+            if not parent.in_graph:
+                parent.in_graph = True
+                parent_parent_edges = sorted([parent_edge for parent_edge in parent.parent_edges], key = lambda edge: abs_id(edge.score), reverse=True)
+                edges = heapq.merge(edges, parent_parent_edges, key = lambda edge: abs_id(edge.score), reverse=True)
+
+    def add_parents(self, k: int = 5, eps: float = 0.2):
+        """
+        Somtimes, post-thresholding, nodes have no parents. This tries to find some parents (doesn't work well)
+        """
+        for node in self.nodes.values():
+            if node.in_graph and not (isinstance(node, InputNode) or any(parent_edge.in_graph for parent_edge in node.parent_edges)):
+                parent_edges = sorted([(edge, edge.score) for edge in node.parent_edges], key=lambda x: x[1], reverse=True)
+                _, top_score = parent_edges[0]
+                if top_score <= 0:
+                    continue 
+                for edge, score in parent_edges[:k]:
+                    if score >= top_score * eps and edge.parent.in_graph:
+                        edge.in_graph = True
 
     def prune_dead_nodes(self, prune_childless_attn=False, prune_childless=False, prune_parentless=False):
         for logit in self.logits:
@@ -320,7 +367,7 @@ class Graph:
     
     def to_json(self, filename):
         # non serializable info
-        d = {'cfg':self.cfg, 'nodes': {name: node.in_graph for name, node in self.nodes.items()}, 'edges':{name: {'score': float(edge.score), 'in_graph':edge.in_graph} for name, edge in self.edges.items()}, 'n_pos':self.n_pos}
+        d = {'cfg':self.cfg, 'nodes': {str(name): bool(node.in_graph) for name, node in self.nodes.items()}, 'edges':{str(name): {'score': float(edge.score), 'in_graph': bool(edge.in_graph)} for name, edge in self.edges.items()}, 'n_pos':self.n_pos}
         with open(filename, 'w') as f:
             json.dump(d, f)
 
