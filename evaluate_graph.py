@@ -69,7 +69,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
 
     return torch.cat(results)
 
-def evaluate_baseline(model: HookedTransformer, graph: Graph,  clean_inputs, corrupted_inputs, labels, metric: Callable[[Tensor], Tensor]):
+def evaluate_baseline(model: HookedTransformer, clean_inputs, corrupted_inputs, labels, metric: Callable[[Tensor], Tensor]):
     results = []
     for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
         tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
