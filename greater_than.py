@@ -11,6 +11,7 @@ from greater_than_dataset import get_prob_diff, YearDataset, get_valid_years
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 from evaluate_graph import evaluate_graph
 
+
 from attribute import attribute
 from attribute_mem import attribute as attribute_mem
 from attribute_vectorized import attribute_vectorized
@@ -47,14 +48,17 @@ prob_diff = get_prob_diff(model.tokenizer)
 # Instantiate a graph with a model
 g = Graph.from_model(model)
 # Attribute using the model, graph, clean / corrupted data (as lists of lists of strs), your metric, and your labels (batched)
+
 attribute(model, g, clean, corrupted, labels, lambda logits,corrupted_logits,input_lengths,labels: prob_diff(logits, labels),)
 scores = g.scores(sort=True)
 #%%
 g.apply_greedy(400, absolute=False)
 g.prune_dead_nodes(prune_childless=True, prune_parentless=True)
+print(g.count_included_edges())
 gz = g.to_graphviz()
 gz.draw(f'graph_gt_{model_name_noslash}.png', prog='dot')
 results = evaluate_graph(model, g, clean, corrupted, labels, lambda logits,corrupted_logits,input_lengths,labels: -prob_diff(logits, labels))
+
 # %%
 # Instantiate a graph with a model
 g2 = Graph.from_model(model)
