@@ -8,14 +8,14 @@ from einops import rearrange, einsum
 
 from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode, Node
 
-def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrupted_inputs, labels, metric: Callable[[Tensor], Tensor], prune:bool=True):
+def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrupted_inputs, labels, metrics: List[Callable[[Tensor], Tensor]], prune:bool=True):
     """
     Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
     """
     if prune:
         graph.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 
-    fwd_names = graph.parent_node_names()
+    fwd_names = {edge.parent.out_hook for edge in graph.edges.values()}
     fwd_filter = lambda x: x in fwd_names
     
     corrupted_fwd_cache, corrupted_fwd_hooks, _ = model.get_caching_hooks(fwd_filter)
@@ -51,7 +51,12 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
             
     # and here we actually run / evaluate the model
-    results = []
+    metrics_list = True
+    if not isinstance(metrics, list):
+        metrics = [metrics]
+        metrics_list = False
+    results = [[] for _ in metrics]
+    
     for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
         tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
         input_lengths = 1 + tokenized.attention_mask.sum(1)
@@ -62,12 +67,40 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
             with model.hooks(mixed_fwd_hooks + input_construction_hooks):
                 logits = model(clean)
 
-        r = metric(logits, corrupted_logits, input_lengths, label).cpu()
-        if len(r.size()) == 0:
-            r = r.unsqueeze(0)
-        results.append(r)
+        for i, metric in enumerate(metrics):
+            r = metric(logits, corrupted_logits, input_lengths, label).cpu()
+            if len(r.size()) == 0:
+                r = r.unsqueeze(0)
+            results[i].append(r)
 
-    return torch.cat(results)
+    results = [torch.cat(rs) for rs in results]
+    if not metrics_list:
+        results = results[0]
+    return results
+
+def evaluate_baseline(model: HookedTransformer, clean_inputs, corrupted_inputs, labels, metrics: List[Callable[[Tensor], Tensor]]):
+    metrics_list = True
+    if not isinstance(metrics, list):
+        metrics = [metrics]
+        metrics_list = False
+    
+    results = [[] for _ in metrics]
+    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+        tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
+        input_lengths = 1 + tokenized.attention_mask.sum(1)
+        with torch.inference_mode():
+            corrupted_logits = model(corrupted)
+            logits = model(clean)
+        for i, metric in enumerate(metrics):
+            r = metric(logits, corrupted_logits, input_lengths, label).cpu()
+            if len(r.size()) == 0:
+                r = r.unsqueeze(0)
+            results[i].append(r)
+
+    results = [torch.cat(rs) for rs in results]
+    if not metrics_list:
+        results = results[0]
+    return results
 
 def evaluate_baseline(model: HookedTransformer, clean_inputs, corrupted_inputs, labels, metric: Callable[[Tensor], Tensor]):
     results = []
