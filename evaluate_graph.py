@@ -15,7 +15,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph,  clean_inputs, corrup
     if prune:
         graph.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 
-    fwd_names = graph.parent_node_names()
+    fwd_names = {edge.parent.out_hook for edge in graph.edges.values()}
     fwd_filter = lambda x: x in fwd_names
     
     corrupted_fwd_cache, corrupted_fwd_hooks, _ = model.get_caching_hooks(fwd_filter)
