@@ -14,7 +14,6 @@ from evaluate_graph import evaluate_graph
 
 from attribute import attribute
 from attribute_mem import attribute as attribute_mem
-from attribute_vectorized import attribute_vectorized
 #%%
 model_name = 'gpt2-small'
 model_name_noslash = model_name.split('/')[-1]

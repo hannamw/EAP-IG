@@ -105,22 +105,24 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str
             with model.hooks(fwd_hooks=fwd_hooks_corrupted):
                 _ = model(corrupted)
 
-            input_activations_corrupted = activation_difference[:, :, 0].clone()
+            input_activations_corrupted = activation_difference[:, :, graph.forward_index(graph.nodes['input'])].clone()
 
             with model.hooks(fwd_hooks=fwd_hooks_clean):
                 clean_logits = model(clean)
 
-            input_activations_clean = input_activations_corrupted - activation_difference[:, :, 0]
+            input_activations_clean = input_activations_corrupted - activation_difference[:, :, graph.forward_index(graph.nodes['input'])]
 
         def input_interpolation_hook(k: int):
             def hook_fn(activations, hook):
-                return input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
+                new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
+                new_input.requires_grad = True 
+                return new_input
             return hook_fn
 
         total_steps = 0
         for step in range(1, steps+1):
             total_steps += 1
-            with model.hooks(fwd_hooks=[("blocks.0.hook_resid_pre", input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
+            with model.hooks(fwd_hooks=[(graph.nodes['input'].out_hook, input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
                 logits = model(clean)
                 metric_value = metric(logits, clean_logits, input_lengths, label)
                 metric_value.backward()
