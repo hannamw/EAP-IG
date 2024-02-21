@@ -9,7 +9,7 @@ from transformer_lens import HookedTransformer, HookedTransformerConfig
 import numpy as np
 import pygraphviz as pgv
 
-from visualization import EDGE_TYPE_COLORS, generate_random_color
+from .visualization import EDGE_TYPE_COLORS, generate_random_color
 
 class Node:
     """
