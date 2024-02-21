@@ -45,7 +45,7 @@ class Node:
         return self.name == other.name
     
     def __repr__(self):
-        return f'Node({self.name})'
+        return f'Node({self.name}, in_graph={self.in_graph})'
     
     def __hash__(self):
         return hash(self.name)
@@ -111,7 +111,7 @@ class Edge:
         return self.name == other.name
     
     def __repr__(self):
-        return f'Edge({self.name})'
+        return f'Edge({self.name}, score={self.score}, in_graph={self.in_graph})'
     
     def __hash__(self):
         return hash(self.name)
