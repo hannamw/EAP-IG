@@ -60,7 +60,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
             
     return (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), (activation_difference, gradients)
 
-def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: torch.Tensor, corrupted_inputs: torch.Tensor, labels: torch.Tensor, positions: torch.Tensor, flags_tensor: torch.Tensor, metric: Callable[[Tensor], Tensor]):
+def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: torch.Tensor, corrupted_inputs: torch.Tensor, labels: torch.Tensor, metric: Callable[[Tensor], Tensor], **additional_kwargs):
     batch_size = len(clean_inputs)
     n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
 
@@ -71,12 +71,12 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: torch.
 
     with model.hooks(fwd_hooks=fwd_hooks_clean, bwd_hooks=bwd_hooks):
         logits = model(clean_inputs)
-        metric_value = metric(logits, corrupted_logits, labels, positions, flags_tensor)
+        metric_value = metric(logits, corrupted_logits, labels, **additional_kwargs)
         metric_value.backward()
 
     return activation_difference, gradients
 
-def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: torch.Tensor, corrupted_inputs: torch.Tensor, labels: torch.Tensor, positions: torch.Tensor, flags_tensor: torch.Tensor, metric: Callable[[Tensor], Tensor], steps=30):
+def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: torch.Tensor, corrupted_inputs: torch.Tensor, labels: torch.Tensor, metric: Callable[[Tensor], Tensor], steps=30, **additional_kwargs):
     batch_size = clean_inputs.size(0)
     n_pos = clean_inputs.size(1)
     #n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
@@ -106,7 +106,7 @@ def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: tor
         total_steps += 1
         with model.hooks(fwd_hooks=[(graph.nodes['input'].out_hook, input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
             logits = model(clean_inputs)
-            metric_value = metric(logits, clean_logits, labels, positions, flags_tensor)
+            metric_value = metric(logits, clean_logits, labels, **additional_kwargs)
             metric_value.backward()
 
     gradients = gradients / total_steps
@@ -121,14 +121,19 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
     all_scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)
 
     total_items = 0
-    for clean, corrupted, label, positions, flags_tensor in tqdm(dataloader):
+    for batch in tqdm(dataloader):
+        clean = batch['toks']
+        corrupted = batch['flipped_toks']
+        label = batch['answer_toks']
+        additional_kwargs = {k: v for k, v in batch.items() if k not in ['toks', 'flipped_toks', 'answer_toks']}
+
         total_items += len(clean)
         
         if integrated_gradients is None:
-            activation_differences, gradients = get_activations(model, graph, clean, corrupted, label, positions, flags_tensor, metric)
+            activation_differences, gradients = get_activations(model, graph, clean, corrupted, label, metric, **additional_kwargs)
         else:
             assert integrated_gradients > 0, f"integrated_gradients gives positive # steps (m), but got {integrated_gradients}"
-            activation_differences, gradients = get_activations_ig(model, graph, clean, corrupted, label, positions, flags_tensor, metric, steps=integrated_gradients)
+            activation_differences, gradients = get_activations_ig(model, graph, clean, corrupted, label, metric, steps=integrated_gradients, **additional_kwargs)
 
         scores = einsum(activation_differences, gradients,'batch pos n_forward hidden, batch pos n_backward hidden -> n_forward n_backward')
 

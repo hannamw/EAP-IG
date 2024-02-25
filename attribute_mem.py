@@ -75,7 +75,12 @@ def get_scores(model: HookedTransformer, graph: Graph, dataloader: DataLoader, m
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
     total_items = 0
-    for clean, corrupted, label, positions, flags_tensor in tqdm(dataloader):
+    for batch in tqdm(dataloader):
+        clean = batch['toks']
+        corrupted = batch['flipped_toks']
+        label = batch['answer_toks']
+        additional_kwargs = {k: v for k, v in batch.items() if k not in ['toks', 'flipped_toks', 'answer_toks']}
+
         batch_size = len(clean)
         total_items += batch_size
         n_pos = clean.size(1)
@@ -87,7 +92,7 @@ def get_scores(model: HookedTransformer, graph: Graph, dataloader: DataLoader, m
 
         with model.hooks(fwd_hooks=fwd_hooks_clean, bwd_hooks=bwd_hooks):
             logits = model(clean)
-            metric_value = metric(logits, corrupted_logits, label, positions, flags_tensor)
+            metric_value = metric(logits, corrupted_logits, label, **additional_kwargs)
             metric_value.backward()
 
     scores /= total_items
@@ -98,7 +103,12 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
     total_items = 0
-    for clean, corrupted, label, positions, flags_tensor in tqdm(dataloader):
+    for batch in tqdm(dataloader):
+        clean = batch['toks']
+        corrupted = batch['flipped_toks']
+        label = batch['answer_toks']
+        additional_kwargs = {k: v for k, v in batch.items() if k not in ['toks', 'flipped_toks', 'answer_toks']}
+
         batch_size = len(clean)
         total_items += batch_size
         n_pos = clean.size(1)
@@ -128,7 +138,7 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader
             total_steps += 1
             with model.hooks(fwd_hooks=[(graph.nodes['input'].out_hook, input_interpolation_hook(step))], bwd_hooks=bwd_hooks):
                 logits = model(clean)
-                metric_value = metric(logits, clean_logits, label, positions, flags_tensor)
+                metric_value = metric(logits, clean_logits, label, **additional_kwargs)
                 metric_value.backward()
 
     scores /= total_items

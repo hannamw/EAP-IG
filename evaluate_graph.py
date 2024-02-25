@@ -57,9 +57,12 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         metrics_list = False
     results = [[] for _ in metrics]
     
-    for clean, corrupted, label, positions, flags_tensor in tqdm(dataloader):
-        #tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
-        #input_lengths = 1 + tokenized.attention_mask.sum(1)
+    for batch in tqdm(dataloader):
+        clean = batch['toks']
+        corrupted = batch['flipped_toks']
+        label = batch['answer_toks']
+        additional_kwargs = {k: v for k, v in batch.items() if k not in ['toks', 'flipped_toks', 'answer_toks']}
+
         with torch.inference_mode():
             with model.hooks(corrupted_fwd_hooks):
                 corrupted_logits = model(corrupted)
@@ -68,7 +71,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 logits = model(clean)
 
         for i, metric in enumerate(metrics):
-            r = metric(logits, corrupted_logits, label, positions, flags_tensor).cpu()
+            r = metric(logits, corrupted_logits, label, **additional_kwargs).cpu()
             if len(r.size()) == 0:
                 r = r.unsqueeze(0)
             results[i].append(r)
@@ -85,14 +88,17 @@ def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metrics:
         metrics_list = False
     
     results = [[] for _ in metrics]
-    for clean, corrupted, label, positions, flags_tensor in tqdm(dataloader):
-        #tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
-        #input_lengths = 1 + tokenized.attention_mask.sum(1)
+    for batch in tqdm(dataloader):
+        clean = batch['toks']
+        corrupted = batch['flipped_toks']
+        label = batch['answer_toks']
+        additional_kwargs = {k: v for k, v in batch.items() if k not in ['toks', 'flipped_toks', 'answer_toks']}
+
         with torch.inference_mode():
             corrupted_logits = model(corrupted)
             logits = model(clean)
         for i, metric in enumerate(metrics):
-            r = metric(logits, corrupted_logits, label, positions, flags_tensor).cpu()
+            r = metric(logits, corrupted_logits, label, **additional_kwargs).cpu()
             if len(r.size()) == 0:
                 r = r.unsqueeze(0)
             results[i].append(r)
