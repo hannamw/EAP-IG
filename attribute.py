@@ -144,7 +144,7 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
         
         all_scores += scores #* batch_size / total_items
     all_scores /= total_items 
-    all_scores = all_scores.cpu().numpy()
+    all_scores = all_scores.cpu().float().numpy()
 
     for edge in tqdm(graph.edges.values(), total=len(graph.edges)):
         edge.score = all_scores[graph.forward_index(edge.parent, attn_slice=False), graph.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)]
