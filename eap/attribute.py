@@ -6,7 +6,7 @@ from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
+from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 def get_npos_input_lengths(model, inputs):
     tokenized = model.tokenizer(inputs, padding='longest', return_tensors='pt', add_special_tokens=True)
@@ -112,20 +112,15 @@ def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: Lis
     return activation_difference, gradients
 
 allowed_aggregations = {'sum', 'mean', 'l2'}        
-def attribute(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor], aggregation='sum', integrated_gradients: Optional[int]=None):
+def attribute(model: HookedTransformer, graph: Graph, dataset, metric: Callable[[Tensor], Tensor], aggregation='sum', integrated_gradients: Optional[int]=None):
     if aggregation not in allowed_aggregations:
         raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')
 
     all_scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)
 
-    if isinstance(clean_inputs[0], str):
-        clean_inputs = [clean_inputs]
-    if isinstance(corrupted_inputs[0], str):
-        corrupted_inputs = [corrupted_inputs]
-
-    total_items = sum(len(c) for c in clean_inputs)
-    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
-        #batch_size = len(clean)
+    total_items = 0
+    for clean, corrupted, label in tqdm(dataset):
+        total_items += len(clean)
         
         if integrated_gradients is None:
             activation_differences, gradients = get_activations(model, graph, clean, corrupted, metric, label)
