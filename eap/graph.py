@@ -166,8 +166,11 @@ class Graph:
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
-    def scores(self, nonzero=False, in_graph=False, sort=True):
-        s = torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
+    def scores(self, absolute=False, nonzero=False, in_graph=False, sort=True):
+        s = [edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)] if nonzero else [edge.score for edge in self.edges.values()]
+        s = torch.tensor(s)
+        if absolute:
+            s = s.abs()
         return torch.sort(s).values if sort else s
 
     def count_included_edges(self):
