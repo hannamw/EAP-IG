@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode, Node
 
-def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: List[Callable[[Tensor], Tensor]], prune:bool=True):
+def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: List[Callable[[Tensor], Tensor]], prune:bool=True, return_logits=False):
     """
     Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
     """
@@ -56,6 +56,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         metrics = [metrics]
         metrics_list = False
     results = [[] for _ in metrics]
+
+    logits_list = []
     
     for batch in tqdm(dataloader):
         clean = batch['toks']
@@ -69,6 +71,9 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
 
             with model.hooks(mixed_fwd_hooks + input_construction_hooks):
                 logits = model(clean)
+        
+        if return_logits:
+            logits_list.append(logits.cpu())
 
         for i, metric in enumerate(metrics):
             r = metric(logits, corrupted_logits, label, **additional_kwargs).cpu()
@@ -79,14 +84,18 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     results = [torch.cat(rs) for rs in results]
     if not metrics_list:
         results = results[0]
+
+    if return_logits:
+        results = (results, torch.stack(logits_list))
     return results
 
-def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metrics: List[Callable[[Tensor], Tensor]]):
+def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metrics: List[Callable[[Tensor], Tensor]], return_logits=False):
     metrics_list = True
     if not isinstance(metrics, list):
         metrics = [metrics]
         metrics_list = False
     
+    logits_list = []
     results = [[] for _ in metrics]
     for batch in tqdm(dataloader):
         clean = batch['toks']
@@ -97,6 +106,10 @@ def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metrics:
         with torch.inference_mode():
             corrupted_logits = model(corrupted)
             logits = model(clean)
+
+        if return_logits:
+            logits_list.append(logits.cpu())
+            
         for i, metric in enumerate(metrics):
             r = metric(logits, corrupted_logits, label, **additional_kwargs).cpu()
             if len(r.size()) == 0:
@@ -106,6 +119,9 @@ def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metrics:
     results = [torch.cat(rs) for rs in results]
     if not metrics_list:
         results = results[0]
+
+    if return_logits:
+        results = (results, torch.stack(logits_list))
     return results
 
 def evaluate_kl(model: HookedTransformer, inputs, target_inputs):
