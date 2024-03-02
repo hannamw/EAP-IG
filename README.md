@@ -10,3 +10,5 @@ This repo contains the following files:
 - `evaluate.py` contains the code for evaluating circuits
 - `greater_than.py` shows how to run EAP on the greater-than task. 
 - `greater_than_dataset.py` contains an implementation of the greater-than task (copied pretty much verbatim from the original)
+
+This repo owes a lot to [the original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular the conceptualization of the graph and its visualization—go check it out!
