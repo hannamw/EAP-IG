@@ -103,7 +103,7 @@ class Edge:
         if self.qkv is not None:
             return EDGE_TYPE_COLORS[self.qkv]
         elif self.score < 0:
-            return "#FF00FF"
+            return "#FF0000"
         else:
             return "#000000"
 
@@ -330,7 +330,8 @@ class Graph:
     def to_graphviz(
         self,
         colorscheme: str = "Pastel2",
-        minimum_penwidth: float = 0.3,
+        minimum_penwidth: float = 0.6,
+        maximum_penwidth: float = 5.0,
         layout: str="dot",
         seed: Optional[int] = None
     ) -> pgv.AGraph:
@@ -354,12 +355,17 @@ class Graph:
                         fontname="Helvetica",
                         )
 
+        scores = self.scores().abs()
+        max_score = scores.max().item()
+        min_score = scores.min().item()
         for edge in self.edges.values():
             if edge.in_graph:
                 score = 0 if edge.score is None else edge.score
+                normalized_score = (abs(score) - min_score) / (max_score - min_score) if max_score != min_score else abs(score)
+                penwidth = max(minimum_penwidth, normalized_score * maximum_penwidth)
                 g.add_edge(edge.parent.name,
                         edge.child.name,
-                        penwidth=str(max(minimum_penwidth, score) * 2),
+                        penwidth=str(penwidth),
                         color=edge.get_color(),
                         )
         return g
