@@ -104,22 +104,6 @@ def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: 
         results = results[0]
     return results
 
-def evaluate_baseline(model: HookedTransformer, dataloader: DataLoader, metric: Callable[[Tensor], Tensor]):
-    results = []
-    for clean, corrupted, label in tqdm(dataloader):
-        tokenized = model.tokenizer(clean, padding='longest', return_tensors='pt', add_special_tokens=True)
-        input_lengths = 1 + tokenized.attention_mask.sum(1)
-        with torch.inference_mode():
-            corrupted_logits = model(corrupted)
-            logits = model(clean)
-        r = metric(logits, corrupted_logits, input_lengths, label).cpu()
-        if len(r.size()) == 0:
-            r = r.unsqueeze(0)
-        results.append(r)
-
-    return torch.cat(results)
-
-
 def evaluate_kl(model: HookedTransformer, inputs, target_inputs):
     results = []
     for inp, target in tqdm(zip(inputs, target_inputs), total=len(inputs)):
