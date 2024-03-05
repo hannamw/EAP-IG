@@ -14,6 +14,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataset, metrics: Lis
     if prune:
         graph.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 
+    empty_circuit = not graph.nodes['logits'].in_graph
+
     fwd_names = {edge.parent.out_hook for edge in graph.edges.values()}
     fwd_filter = lambda x: x in fwd_names
     
@@ -64,7 +66,12 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataset, metrics: Lis
                 corrupted_logits = model(corrupted)
 
             with model.hooks(mixed_fwd_hooks + input_construction_hooks):
-                logits = model(clean)
+                if empty_circuit:
+                    # if the circuit is totally empty, so is nodes_in_graph
+                    # so we just corrupt everything manually like this
+                    logits = model(corrupted)
+                else:
+                    logits = model(clean)
 
         for i, metric in enumerate(metrics):
             r = metric(logits, corrupted_logits, input_lengths, label).cpu()
