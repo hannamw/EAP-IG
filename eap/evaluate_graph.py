@@ -87,7 +87,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         results = results[0]
     return results
 
-def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]]):
+def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]], run_corrupted=False):
     metrics_list = True
     if not isinstance(metrics, list):
         metrics = [metrics]
@@ -101,7 +101,10 @@ def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: 
             corrupted_logits = model(corrupted)
             logits = model(clean)
         for i, metric in enumerate(metrics):
-            r = metric(logits, corrupted_logits, input_lengths, label).cpu()
+            if run_corrupted:
+                r = metric(corrupted_logits, logits, input_lengths, label).cpu()
+            else:
+                r = metric(logits, corrupted_logits, input_lengths, label).cpu()
             if len(r.size()) == 0:
                 r = r.unsqueeze(0)
             results[i].append(r)
