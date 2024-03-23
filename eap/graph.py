@@ -183,8 +183,22 @@ class Graph:
             
         for edge in self.edges.values():
             edge.in_graph = abs(edge.score) >= threshold if absolute else edge.score >= threshold
+    
+    def apply_topn(self, n:int, absolute: bool):
+        a = abs if absolute else lambda x: x
+        for node in self.nodes.values():
+            node.in_graph = False
 
-    def apply_greedy(self, n_edges, reset=True, absolute: bool=False):
+        sorted_edges = sorted(list(self.edges.values()), key = lambda edge: a(edge.score), reverse=True)
+        for edge in sorted_edges[:n]:
+            edge.in_graph = True 
+            edge.parent.in_graph = True 
+            edge.child.in_graph = True 
+
+        for edge in sorted_edges[n:]:
+            edge.in_graph = False
+
+    def apply_greedy(self, n_edges, reset=True, absolute: bool=True):
         if reset:
             for node in self.nodes.values():
                 node.in_graph = False 
