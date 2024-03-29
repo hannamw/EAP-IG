@@ -71,3 +71,4 @@ g2.prune_dead_nodes(prune_childless=True, prune_parentless=True)
 gz2 = g2.to_graphviz()
 gz2.draw(f'graph_gt_{model_name_noslash}.png', prog='dot')
 results2 = evaluate_graph(model, g2, clean, corrupted, labels, lambda logits,corrupted_logits,input_lengths,labels: -prob_diff(logits, labels))
+

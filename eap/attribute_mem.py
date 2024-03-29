@@ -2,12 +2,13 @@ from typing import Callable, List, Union, Optional
 from functools import partial
 
 import torch
+from torch.utils.data import DataLoader
 from torch import Tensor
 from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
+from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
 
 def get_npos_input_lengths(model, inputs):
     tokenized = model.tokenizer(inputs, padding='longest', return_tensors='pt', add_special_tokens=True)
@@ -70,11 +71,14 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
             
     return (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference
 
-def get_scores(model: HookedTransformer, graph: Graph, clean_inputs: List[List[str]], corrupted_inputs: List[List[str]], metric: Callable[[Tensor], Tensor], labels):
+def get_scores(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], quiet=False):
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
-    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+    total_items = 0
+    dataloader = dataloader if quiet else tqdm(dataloader)
+    for clean, corrupted, label in dataloader:
         batch_size = len(clean)
+        total_items += batch_size
         n_pos, input_lengths = get_npos_input_lengths(model, clean)
 
         (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores)
@@ -87,16 +91,18 @@ def get_scores(model: HookedTransformer, graph: Graph, clean_inputs: List[List[s
             metric_value = metric(logits, corrupted_logits, input_lengths, label)
             metric_value.backward()
 
-    total_items = sum(len(c) for c in clean_inputs)
     scores /= total_items
 
     return scores
 
-def get_scores_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels, steps=30):
+def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], steps=30, quiet=False, old=False):
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
-    for clean, corrupted, label in tqdm(zip(clean_inputs, corrupted_inputs, labels), total=len(clean_inputs)):
+    total_items = 0
+    dataloader = dataloader if quiet else tqdm(dataloader)
+    for clean, corrupted, label in dataloader:
         batch_size = len(clean)
+        total_items += batch_size
         n_pos, input_lengths = get_npos_input_lengths(model, clean)
 
         (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores)
@@ -114,7 +120,14 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str
 
         def input_interpolation_hook(k: int):
             def hook_fn(activations, hook):
+<<<<<<< HEAD:eap/attribute_mem.py
+                if old:
+                    new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
+                else:
+                    new_input = input_activations_corrupted + (k / steps) * (input_activations_clean - input_activations_corrupted) 
+=======
                 new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
+>>>>>>> bcf259d5487512e1d4f15a2025e06aabf6484bc4:attribute_mem.py
                 new_input.requires_grad = True 
                 return new_input
             return hook_fn
@@ -127,27 +140,21 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str
                 metric_value = metric(logits, clean_logits, input_lengths, label)
                 metric_value.backward()
 
-    total_items = sum(len(c) for c in clean_inputs)
     scores /= total_items
     scores /= total_steps
 
     return scores
 
 allowed_aggregations = {'sum', 'mean', 'l2'}        
-def attribute(model: HookedTransformer, graph: Graph, clean_inputs: Union[List[str], List[List[str]]], corrupted_inputs: Union[List[str], List[List[str]]], labels, metric: Callable[[Tensor], Tensor], aggregation='sum', integrated_gradients: Optional[int]=None):
+def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], aggregation='sum', integrated_gradients: Optional[int]=None, quiet=False):
     if aggregation not in allowed_aggregations:
         raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')
-
-    if isinstance(clean_inputs[0], str):
-        clean_inputs = [clean_inputs]
-    if isinstance(corrupted_inputs[0], str):
-        corrupted_inputs = [corrupted_inputs]
         
     if integrated_gradients is None:
-        scores = get_scores(model, graph, clean_inputs, corrupted_inputs, metric, labels)
+        scores = get_scores(model, graph, dataloader, metric, quiet=quiet)
     else:
         assert integrated_gradients > 0, f"integrated_gradients gives positive # steps (m), but got {integrated_gradients}"
-        scores = get_scores_ig(model, graph, clean_inputs, corrupted_inputs, metric, labels, steps=integrated_gradients)
+        scores = get_scores_ig(model, graph, dataloader, metric, steps=integrated_gradients, quiet=quiet)
 
         if aggregation == 'mean':
             scores /= model.cfg.d_model
