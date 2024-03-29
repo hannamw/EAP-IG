@@ -95,7 +95,7 @@ def get_scores(model: HookedTransformer, graph: Graph, dataloader:DataLoader, me
 
     return scores
 
-def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], steps=30, quiet=False, old=False):
+def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], steps=30, quiet=False):
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
     total_items = 0
@@ -120,14 +120,7 @@ def get_scores_ig(model: HookedTransformer, graph: Graph, dataloader: DataLoader
 
         def input_interpolation_hook(k: int):
             def hook_fn(activations, hook):
-<<<<<<< HEAD:eap/attribute_mem.py
-                if old:
-                    new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
-                else:
-                    new_input = input_activations_corrupted + (k / steps) * (input_activations_clean - input_activations_corrupted) 
-=======
-                new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
->>>>>>> bcf259d5487512e1d4f15a2025e06aabf6484bc4:attribute_mem.py
+                new_input = input_activations_corrupted + (k / steps) * (input_activations_clean - input_activations_corrupted) 
                 new_input.requires_grad = True 
                 return new_input
             return hook_fn

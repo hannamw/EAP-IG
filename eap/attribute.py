@@ -76,7 +76,7 @@ def get_activations(model: HookedTransformer, graph: Graph, clean_inputs: List[s
 
     return activation_difference, gradients
 
-def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels, steps=30, old=False):
+def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: List[str], corrupted_inputs: List[str], metric: Callable[[Tensor], Tensor], labels, steps=30):
     batch_size = len(clean_inputs)
     n_pos, input_lengths = get_npos_input_lengths(model, clean_inputs)
 
@@ -95,14 +95,7 @@ def get_activations_ig(model: HookedTransformer, graph: Graph, clean_inputs: Lis
 
     def input_interpolation_hook(k: int):
         def hook_fn(activations, hook):
-<<<<<<< HEAD:eap/attribute.py
-            if old:
-                new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
-            else:
-                new_input = input_activations_corrupted + (k / steps) * (input_activations_clean - input_activations_corrupted) 
-=======
-            new_input = input_activations_clean + (k / steps) * (input_activations_corrupted - input_activations_clean) 
->>>>>>> bcf259d5487512e1d4f15a2025e06aabf6484bc4:attribute.py
+            new_input = input_activations_corrupted + (k / steps) * (input_activations_clean - input_activations_corrupted) 
             new_input.requires_grad = True 
             return new_input
         return hook_fn
