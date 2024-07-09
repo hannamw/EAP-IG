@@ -46,7 +46,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
         try:
             activation_difference[:, :, index] += acts
         except RuntimeError as e:
-            print(hook.name, activation_difference[:, :, index].size(), acts.size())
+            print("Activation Hook Error", hook.name, activation_difference[:, :, index].size(), acts.size(), index)
             raise e
     
     def gradient_hook(prev_index: Union[slice, int], bwd_index: Union[slice, int], gradients:torch.Tensor, hook):
@@ -66,7 +66,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
             s = s.squeeze(1)#.to(scores.device)
             scores[:prev_index, bwd_index] += s
         except RuntimeError as e:
-            print(hook.name, activation_difference.size(), grads.size())
+            print("Gradient Hook Error", hook.name, activation_difference.size(), grads.size(), prev_index, bwd_index)
             raise e
 
     for name, node in graph.nodes.items():
@@ -78,7 +78,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
 
         # exclude logits from forward
         if not isinstance(node, LogitNode):
-            fwd_index =  graph.forward_index(node)
+            fwd_index = graph.forward_index(node)
             fwd_hooks_corrupted.append((node.out_hook, partial(activation_hook, fwd_index)))
             fwd_hooks_clean.append((node.out_hook, partial(activation_hook, fwd_index, add=False)))
         if not isinstance(node, InputNode):
