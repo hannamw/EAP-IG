@@ -26,6 +26,6 @@ I recently updated this repo with a few improvements (v0.2.0); for the old versi
 - Graph evaluation is now tensorized (and skips unnecessary nodes), making it much faster.
 - Changed how tokenizers are handled to be more compatible with newer versions of TransformerLens.
 - You can now export graphs as `.pt` files, which takes less space than `.json` files.
-- Added a `requirements.txt` file.
+- Added a `requirements.txt` file, as well as an `environment.yml` file. I used conda to handle my virtual environments, so the latter might work better.
 - Removed the dependency on `cmapy`, because cmapy isn't updated to work with newer versions of matplotlib; full disclosure, some of the `visualization.py` code thus comes directly from `cmapy`, just updated a little. This is also nice because it removes the need to download 
 - Added more comments (but more documentation is still needed!)
