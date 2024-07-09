@@ -238,9 +238,10 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
         clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, clean)
         corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
 
-        (_, _, bwd_hooks), activation_difference = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=False)
-        (fwd_hooks_corrupted, _, _), activations_corrupted = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=False)
-        (fwd_hooks_clean, _, _), activations_clean = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=False)
+        detach = bool(ablate_all_at_once)
+        (_, _, bwd_hooks), activation_difference = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=detach)
+        (fwd_hooks_corrupted, _, _), activations_corrupted = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=detach)
+        (fwd_hooks_clean, _, _), activations_clean = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, detach=detach)
 
 
         with model.hooks(fwd_hooks=fwd_hooks_corrupted):

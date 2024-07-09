@@ -77,6 +77,15 @@ class InputNode(Node):
         super().__init__(name, 0, '', "hook_embed", index)  #"blocks.0.hook_resid_pre", index)
 
 class Edge:
+    """An Edge in a graph. 
+    Attributes:
+        name: (str): the edge's name, given as [PARENT]->[CHILD]<[OPTIONAL QKV>]; the latter applies only if [CHILD] is an AttentionNode
+        parent: (Node): the parent node of the edge
+        child: (Node): the child node of the edge
+        hook: (str): the hook into the child node
+        index: (Tuple): the index of the child node (only really relevant for AttentionNodes)
+        score: (Optional[float]): the score of the edge (given by an attribution method)
+        in_graph: (bool): whether the edge is in the graph or not"""
     name: str
     parent: Node 
     child: Node 
@@ -127,23 +136,7 @@ class Graph:
         n_forward (int): The number of forward nodes in the graph, i.e. the # of nodes whose output activations we care about
         n_backward (int): The number of backward nodes/indices in the graph, i.e. the # of nodes whose input gradients we care about. Note that attention heads have 3 inputs that need to be dealt with during a backward pass
         cfg (HookedTransformerConfig): The configuration object for the graph.
-    """
-
-    nodes: Dict[str, Node]
-    edges: Dict[str, Edge]
-    n_forward: int 
-    n_backward: int
-    cfg: HookedTransformerConfig
-
-    def __init__(self):
-        self.nodes = {}
-        self.edges = {}
-        self.n_forward = 0
-        self.n_backward = 0
-
-    # Rest of the code...
-class Graph:
-    
+    """    
     nodes: Dict[str, Node]
     edges: Dict[str, Edge]
     n_forward: int 
@@ -481,6 +474,7 @@ class Graph:
         seed: Optional[int] = None
     ) -> pgv.AGraph:
         """
+        Convert the graph to a pygraphviz graph object for visualization.
         Colorscheme: a cmap colorscheme
         """
         g = pgv.AGraph(directed=True, bgcolor="white", overlap="false", splines="true", layout=layout)

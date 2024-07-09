@@ -50,6 +50,9 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
             return activations
         return input_construction_hook
 
+    # we make input construction hooks for every node but InputNodes. 
+    # We can also skip nodes not in the graph; it doesn't matter what their outputs are, as they will always be corrupted / reconstructed when serving as inputs to other nodes.
+    # AttentionNodes have 3 inputs to reconstruct
     def make_input_construction_hooks(activation_differences, in_graph_matrix):
         input_construction_hooks = []
         for node in graph.nodes.values():
