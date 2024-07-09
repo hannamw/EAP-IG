@@ -6,8 +6,24 @@ For a small demo of all these features, check out `greater_than.ipynb`. This rep
 
 This EAP implementation contains the following files:
 - `graph.py` contains the Node, Edge, and Graph classes.
-- `attribute_mem.py` contains a memory-efficient EAP/-IG implementation (see https://github.com/Aaquib111/edge-attribution-patching/tree/minimal-implementation)
-- `attribute.py` contains a slightly faster, but memory-hungry EAP-IG implementation
+- `attribute.py` contains the implementation of EAP/-IG
 - `evaluate.py` contains code for evaluating circuits
+- `visualization.py` contains code for choosing colors / controlling how circuits are visualized
+- `utils.py` contains utils
 
-This repo owes a lot to [the original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular the conceptualization of the graph and its visualization—go check it out!
+This repo owes a lot to:
+- [The original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular for its conceptualization of the graph and its visualization—go check it out!
+- [Aaquib Syed's original EAP implementation](https://github.com/Aaquib111/edge-attribution-patching/tree/minimal-implementation), for its memory efficient implementation of EAP
+
+I recently updated this repo with a few improvements (v0.2.0); for the old version of this repo, please check out branch 0.1.0. The changes made are the following:
+- Added a bunch of variants on EAP-IG, including the following. Find a comparison of these methods in [my paper introducing EAP-IG](https://arxiv.org/abs/2403.17806); long story short, either `EAP-IG` or `clean_corrupted` is probably best:
+    - EAP-IG, where you just average the gradients on the clean and corrupted example (`clean-corrupted`)
+    - EAP-IG, where you set the output to each node to interpolate between its original output and entirely corrupted activations (`EAP-IG-partial-activtions`). This is (by my understanding) equivalent to the [`mask_gradient_prune_scores` method from AutoCircuit](https://ufo-101.github.io/auto-circuit/reference/prune_algos/mask_gradient/#auto_circuit.prune_algos.mask_gradient.mask_gradient_prune_scores).
+    - EAP-IG, where you set the output of each node to interpolate between entirely clean and entirely corrupted activations(`EAP-IG-activations`); this is the EAP-IG introduced in [Marks et al.'s (2024) paper on feature circuits](https://arxiv.org/abs/2403.19647). Note that this version is slower, as it iterates over sublayers (attention blocks and MLPs). Ablating all the sublayers at once doesn't work, so I haven't implemented it.
+- Changed how you specify which variant you want to use. Now, when you call `attribute`, just set the argument `variant` to one of this above; to specify the number of steps, set `ig_steps` (default is 5). The default `variant`is `EAP-IG`
+- Eliminated the fast but memory-hungry versions of EAP-IG originally contained in `attribute.py`; I didn't want to update two versions, and memory efficiency matters more.
+- Graph evaluation is now tensorized (and skips unnecessary nodes), making it much faster.
+- You can now export graphs as `.pt` files, which takes less space than `.json` files.
+- Added a `requirements.txt` file.
+- Removed the dependency on `cmapy`, because cmapy isn't updated to work with newer versions of matplotlib; full disclosure, some of the `visualization.py` code thus comes directly from `cmapy`, just updated a little. This is also nice because it removes the need to download 
+- Added more comments (but more documentation is still needed!)
