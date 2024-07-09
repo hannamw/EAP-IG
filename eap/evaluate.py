@@ -5,16 +5,25 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 from transformer_lens import HookedTransformer
-from transformer_lens.utils import get_attention_mask
 from tqdm import tqdm
 from einops import einsum 
 
 from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode, Node, Edge
-from .attribute_mem import make_hooks_and_matrices
+from .attribute import make_hooks_and_matrices, tokenize_plus
 
-def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: List[Callable[[Tensor], Tensor]], prune:bool=True, quiet=False):
+def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: Union[List[Callable[[Tensor], Tensor]],Callable[[Tensor], Tensor]], prune:bool=True, quiet=False):
     """
     Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
+
+    Args:
+        model: HookedTransformer, the model to evaluate.
+        graph: Graph, the graph to evaluate.
+        dataloader: DataLoader, the dataloader to use for evaluation.
+        metrics: List[Callable[[Tensor], Tensor]], the metrics to evaluate.
+        prune: bool, if True, prune the graph before evaluation.
+        quiet: bool, if True, do not display progress bars.
+    Returns:
+        List[Tensor], the results of the evaluation.
     """
     if prune:
         graph.prune_dead_nodes(prune_childless=True, prune_parentless=True)
@@ -23,6 +32,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     if empty_circuit:
         print("Warning: empty circuit")
 
+    # we construct the in_graph matrix, which is a binary matrix indicating which edges are in the circuit
+    # we invert it so that we add in the corrupting activation differences for edges not in the circuit
     in_graph_matrix = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)
     for edge in graph.edges.values():
         if edge.in_graph:
@@ -62,11 +73,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     
     dataloader = dataloader if quiet else tqdm(dataloader)
     for clean, corrupted, label in dataloader:
-        clean_tokens = model.to_tokens(clean, prepend_bos=True, padding_side='right')
-        corrupted_tokens = model.to_tokens(corrupted, prepend_bos=True, padding_side='right')
-        attention_mask = get_attention_mask(model.tokenizer, clean_tokens, True)
-        input_lengths = attention_mask.sum(1)
-        n_pos = attention_mask.size(1)
+        clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, clean)
+        corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
         
         (fwd_hooks_corrupted, fwd_hooks_clean, _), activation_difference = make_hooks_and_matrices(model, graph, len(clean), n_pos, None)
         
@@ -92,7 +100,18 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         results = results[0]
     return results
 
-def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]], run_corrupted=False, quiet=False):
+def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: Union[List[Callable[[Tensor], Tensor]],Callable[[Tensor], Tensor]], run_corrupted=False, quiet=False):
+    """
+    Evaluate a model with a dataloader and a list of metrics, using only the clean examples, and without considering which graph edges are in/out of the circuit
+    Args:
+        model: HookedTransformer, the model to evaluate.
+        dataloader: DataLoader, the dataloader to use for evaluation.
+        metrics: Union[List[Callable[[Tensor], Tensor]],Callable[[Tensor], Tensor]], the metric or metrics to evaluate.
+        run_corrupted: bool, if True, run the model on corrupted inputs.
+        quiet: bool, if True, do not display progress bars.
+    Returns:
+        List[Tensor], the results of the evaluation.
+    """
     metrics_list = True
     if not isinstance(metrics, list):
         metrics = [metrics]
@@ -101,10 +120,8 @@ def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: 
     results = [[] for _ in metrics]
     dataloader = dataloader if quiet else tqdm(dataloader)
     for clean, corrupted, label in tqdm(dataloader):
-        clean_tokens = model.to_tokens(clean, prepend_bos=True, padding_side='right')
-        corrupted_tokens = model.to_tokens(corrupted, prepend_bos=True, padding_side='right')
-        attention_mask = get_attention_mask(model.tokenizer, clean_tokens, True)
-        input_lengths = attention_mask.sum(1)
+        clean_tokens, attention_mask, input_lengths, _ = tokenize_plus(model, clean)
+        corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
 
         with torch.inference_mode():
             corrupted_logits = model(corrupted_tokens, attention_mask=attention_mask)

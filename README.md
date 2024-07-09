@@ -22,6 +22,7 @@ I recently updated this repo with a few improvements (v0.2.0); for the old versi
     - EAP-IG, where you set the output of each node to interpolate between entirely clean and entirely corrupted activations(`EAP-IG-activations`); this is the EAP-IG introduced in [Marks et al.'s (2024) paper on feature circuits](https://arxiv.org/abs/2403.19647). Note that this version is slower, as it iterates over sublayers (attention blocks and MLPs). Ablating all the sublayers at once doesn't work, so I haven't implemented it.
 - Changed how you specify which variant you want to use. Now, when you call `attribute`, just set the argument `method` to one of this above; to specify the number of steps, set `ig_steps` (default is 5). The default `method` is `EAP-IG`
 - Eliminated the fast but memory-hungry versions of EAP-IG originally contained in `attribute.py`; I didn't want to update two versions, and memory efficiency matters more.
+- `eap.evaluate_graph` is now just `eap.evaluate`
 - Graph evaluation is now tensorized (and skips unnecessary nodes), making it much faster.
 - Changed how tokenizers are handled to be more compatible with newer versions of TransformerLens.
 - You can now export graphs as `.pt` files, which takes less space than `.json` files.
