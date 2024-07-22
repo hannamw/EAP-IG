@@ -221,7 +221,7 @@ class Graph:
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
-    def scores(self, nonzero=False, in_graph=False, sort=True):
+    def get_scores(self, nonzero=False, in_graph=False, sort=True):
         """Return the scores of the edges in the graph
         Args:
             nonzero (bool): whether to return only the nonzero scores
@@ -514,7 +514,7 @@ class Graph:
                         fontname="Helvetica",
                         )
 
-        scores = self.scores().abs()
+        scores = self.get_scores().abs()
         max_score = scores.max().item()
         min_score = scores.min().item()
         for edge in self.edges.values():
