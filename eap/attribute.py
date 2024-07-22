@@ -354,7 +354,4 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
     elif aggregation == 'l2':
         scores = torch.linalg.vector_norm(scores, ord=2, dim=-1)
         
-    scores = scores.cpu().numpy()
-
-    for edge in tqdm(graph.edges.values(), total=len(graph.edges)):
-        edge.score = scores[graph.forward_index(edge.parent, attn_slice=False), graph.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)]
+    graph.scores = scores.cpu()

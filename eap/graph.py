@@ -26,20 +26,29 @@ class Node:
     children: Set['Node']
     child_edges: Set['Edge']
     in_graph: bool
+    graph: 'Graph'
     qkv_inputs: Optional[List[str]]
 
-    def __init__(self, name: str, layer:int, in_hook: List[str], out_hook: str, index: Tuple, qkv_inputs: Optional[List[str]]=None):
+    def __init__(self, name: str, layer:int, in_hook: List[str], out_hook: str, index: Tuple, graph: 'Graph', qkv_inputs: Optional[List[str]]=None):
         self.name = name
         self.layer = layer
         self.in_hook = in_hook
         self.out_hook = out_hook 
         self.index = index
-        self.in_graph = True
         self.parents = set()
         self.children = set()
         self.parent_edges = set()
         self.child_edges = set()
+        self.graph = graph
         self.qkv_inputs = qkv_inputs
+
+    @property
+    def in_graph(self):
+        return self.graph.nodes_in_graph[self.graph.forward_index(self, attn_slice=False)]
+
+    @in_graph.setter
+    def in_graph(self, value):
+        self.graph.nodes_in_graph[self.graph.forward_index(self, attn_slice=False)] = value
 
     def __eq__(self, other):
         return self.name == other.name
@@ -51,30 +60,30 @@ class Node:
         return hash(self.name)
 
 class LogitNode(Node):
-    def __init__(self, n_layers:int):
+    def __init__(self, n_layers:int, graph):
         name = 'logits' 
         index = slice(None) 
-        super().__init__(name, n_layers - 1, f"blocks.{n_layers - 1}.hook_resid_post", '', index)
+        super().__init__(name, n_layers - 1, f"blocks.{n_layers - 1}.hook_resid_post", '', index, graph)
         
 class MLPNode(Node):
-    def __init__(self, layer: int):
+    def __init__(self, layer: int, graph):
         name = f'm{layer}' 
         index = slice(None) 
-        super().__init__(name, layer, f"blocks.{layer}.hook_mlp_in", f"blocks.{layer}.hook_mlp_out", index)
+        super().__init__(name, layer, f"blocks.{layer}.hook_mlp_in", f"blocks.{layer}.hook_mlp_out", index, graph)
 
 class AttentionNode(Node):
     head: int
-    def __init__(self, layer:int, head:int):
+    def __init__(self, layer:int, head:int, graph):
         name = f'a{layer}.h{head}' 
         self.head = head
         index = (slice(None), slice(None), head) 
-        super().__init__(name, layer, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index, [f'blocks.{layer}.hook_{letter}_input' for letter in 'qkv'])
+        super().__init__(name, layer, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index, graph, [f'blocks.{layer}.hook_{letter}_input' for letter in 'qkv'])
 
 class InputNode(Node):
-    def __init__(self):
+    def __init__(self, graph):
         name = 'input' 
         index = slice(None) 
-        super().__init__(name, 0, '', "hook_embed", index)  #"blocks.0.hook_resid_pre", index)
+        super().__init__(name, 0, '', "hook_embed", index, graph)  #"blocks.0.hook_resid_pre", index)
 
 class Edge:
     """An Edge in a graph. 
@@ -91,15 +100,14 @@ class Edge:
     child: Node 
     hook: str
     index: Tuple
-    score : Optional[float]
-    in_graph: bool
-    def __init__(self, parent: Node, child: Node, qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
+    graph: 'Graph'
+    def __init__(self, parent: Node, child: Node, graph: 'Graph', qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
         self.name = f'{parent.name}->{child.name}' if qkv is None else f'{parent.name}->{child.name}<{qkv}>'
         self.parent = parent 
         self.child = child
         self.qkv = qkv
-        self.score = None
-        self.in_graph = True
+        self.graph = graph
+        self.matrix_index = (graph.forward_index(parent, attn_slice=False), graph.backward_index(child, qkv, attn_slice=False))
         if isinstance(child, AttentionNode):
             if qkv is None:
                 raise ValueError(f'Edge({self.name}): Edges to attention heads must have a non-none value for qkv.')
@@ -116,6 +124,22 @@ class Edge:
             return "#FF0000"
         else:
             return "#000000"
+
+    @property
+    def score(self):
+        return self.graph.scores[self.matrix_index]
+    
+    @score.setter
+    def score(self, value):
+        self.graph.scores[self.matrix_index] = value
+    
+    @property
+    def in_graph(self):
+        return self.graph.in_graph[self.matrix_index]
+    
+    @in_graph.setter
+    def in_graph(self, value):
+        self.graph.in_graph[self.matrix_index] = value
 
     def __eq__(self, other):
         return self.name == other.name
@@ -136,12 +160,18 @@ class Graph:
         n_forward (int): The number of forward nodes in the graph, i.e. the # of nodes whose output activations we care about
         n_backward (int): The number of backward nodes/indices in the graph, i.e. the # of nodes whose input gradients we care about. Note that attention heads have 3 inputs that need to be dealt with during a backward pass
         cfg (HookedTransformerConfig): The configuration object for the graph.
+        scores (torch.Tensor): A tensor of the scores of the edges in the graph
+        in_graph (torch.Tensor): A tensor of the in_graph attribute of the edges in the graph
+        nodes_in_graph (torch.Tensor): A tensor of the in_graph attribute of the nodes in the graph
     """    
     nodes: Dict[str, Node]
     edges: Dict[str, Edge]
     n_forward: int 
     n_backward: int
     cfg: HookedTransformerConfig
+    scores: torch.Tensor
+    in_graph: torch.Tensor
+    nodes_in_graph: torch.Tensor
 
     def __init__(self):
         self.nodes = {}
@@ -150,7 +180,7 @@ class Graph:
         self.n_backward = 0
 
     def add_edge(self, parent:Node, child:Node, qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
-        edge = Edge(parent, child, qkv)
+        edge = Edge(parent, child, self, qkv)
         self.edges[edge.name] = edge
         parent.children.add(child)
         parent.child_edges.add(edge)
@@ -190,7 +220,7 @@ class Graph:
         if isinstance(node, InputNode):
             return 0
         elif isinstance(node, LogitNode):
-            raise ValueError("No forward index for logits node")
+            return self.n_forward
         elif isinstance(node, MLPNode):
             return 1 + node.layer * (self.cfg['n_heads'] + 1) + self.cfg['n_heads']
         elif isinstance(node, AttentionNode):
@@ -221,7 +251,7 @@ class Graph:
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
-    def scores(self, nonzero=False, in_graph=False, sort=True):
+    def get_scores(self, nonzero=False, in_graph=False, sort=True):
         """Return the scores of the edges in the graph
         Args:
             nonzero (bool): whether to return only the nonzero scores
@@ -229,7 +259,13 @@ class Graph:
             sort (bool): whether to sort the scores before returning them
         Returns:
             torch.Tensor: a tensor of the scores of the edges in the graph"""
-        s = torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
+        s = self.scores.view(-1)
+        valid = torch.ones_like(s, dtype=torch.bool)
+        if in_graph:
+            valid = valid & self.in_graph.view(-1)
+        if nonzero:
+            valid = valid & (s != 0)
+        s = s[valid]
         return torch.sort(s).values if sort else s
 
     def get_dst_nodes(self):
@@ -269,14 +305,19 @@ class Graph:
         for node in self.nodes.values():
             node.in_graph = False
 
-        sorted_edges = sorted(list(self.edges.values()), key = lambda edge: a(edge.score), reverse=True)
-        for edge in sorted_edges[:n]:
-            edge.in_graph = True 
-            edge.parent.in_graph = True 
-            edge.child.in_graph = True 
+        sorted_edges = torch.sort(self.scores.view(-1), descending=True).indices
 
-        for edge in sorted_edges[n:]:
-            edge.in_graph = False
+        self.in_graph.view(-1)[sorted_edges[:n]] = True
+        self.in_graph.view(-1)[sorted_edges[n:]] = False
+
+        # in graph if any outgoing edge is in graph
+        self.nodes_in_graph[:-1] = self.in_graph.any(dim=1)
+
+        # in graph if any incoming edge in in graph
+        for node in self.nodes.values():
+            if not node.in_graph:
+                node.in_graph = any(edge.in_graph for edge in node.parent_edges)
+
 
     def apply_greedy(self, n_edges, reset=True, absolute: bool = True):
         """Perform a greedy search on the graph, starting from the logits node and selecting the reachable edge with the highest score at each step (of n_edges). An edge is reachable if its child is in the graph; if an edge is selected but its parent is not in the graph, the parent is added.
@@ -346,14 +387,21 @@ class Graph:
             graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
         else:
             graph.cfg = model_or_config
+
+        graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
+        graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
+
+        graph.scores = torch.zeros((graph.n_forward, graph.n_backward))
+        graph.in_graph = torch.zeros((graph.n_forward, graph.n_backward)).bool()
+        graph.nodes_in_graph = torch.zeros(graph.n_forward + 1).bool()
         
-        input_node = InputNode()
+        input_node = InputNode(graph)
         graph.nodes[input_node.name] = input_node
         residual_stream = [input_node]
 
         for layer in range(graph.cfg['n_layers']):
-            attn_nodes = [AttentionNode(layer, head) for head in range(graph.cfg['n_heads'])]
-            mlp_node = MLPNode(layer)
+            attn_nodes = [AttentionNode(layer, head, graph) for head in range(graph.cfg['n_heads'])]
+            mlp_node = MLPNode(layer, graph)
             
             for attn_node in attn_nodes: 
                 graph.nodes[attn_node.name] = attn_node 
@@ -380,26 +428,13 @@ class Graph:
                     graph.add_edge(node, mlp_node)
                 residual_stream.append(mlp_node)
                         
-        logit_node = LogitNode(graph.cfg['n_layers'])
+        logit_node = LogitNode(graph.cfg['n_layers'], graph)
         for node in residual_stream:
             graph.add_edge(node, logit_node)
             
         graph.nodes[logit_node.name] = logit_node
 
-        graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
-        graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
-
         return graph
-
-
-    def edge_matrices(self): 
-        edge_scores = torch.zeros((self.n_forward, self.n_backward))
-        edges_in_graph = torch.zeros((self.n_forward, self.n_backward)).bool()
-        for edge in self.edges.values():
-            edge_scores[self.forward_index(edge.parent, attn_slice=False), self.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)] = float(edge.score)
-            edges_in_graph[self.forward_index(edge.parent, attn_slice=False), self.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)] = edge.in_graph
-            
-        return edge_scores, edges_in_graph
 
 
     def to_json(self, filename: str):
@@ -417,7 +452,7 @@ class Graph:
             filename (str): the filename to save the graph to"""
         src_nodes = {node.name: node.in_graph for node in self.nodes.values() if not isinstance(node, LogitNode)}
         dst_nodes = self.get_dst_nodes()
-        edge_scores, edges_in_graph = self.edge_matrices()
+        edge_scores, edges_in_graph = self.scores, self.in_graph
         d = {'cfg':self.cfg, 'src_nodes': src_nodes, 'dst_nodes': dst_nodes, 'edges': edge_scores, 'edges_in_graph': edges_in_graph}
         torch.save(d, filename)
 
@@ -462,12 +497,8 @@ class Graph:
             g.nodes[name].in_graph = in_graph
 
         # Enumerate over the tensor and fill the edge values in the graph
-        for src_idx, src_name in enumerate(d['src_nodes']):
-            for dst_idx, dst_name in enumerate(d['dst_nodes']):
-                edge_name = f'{src_name}->{dst_name}'
-                if edge_name in g.edges.keys():
-                    g.edges[edge_name].score = d['edges'][src_idx, dst_idx]
-                    g.edges[edge_name].in_graph = d['edges_in_graph'][src_idx, dst_idx]
+        g.scores = d['edges']
+        g.in_graph = d['edges_in_graph']        
 
         return g
     
