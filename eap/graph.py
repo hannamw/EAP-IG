@@ -545,7 +545,7 @@ class Graph:
                         fontname="Helvetica",
                         )
 
-        scores = self.scores().abs()
+        scores = self.get_scores().abs()
         max_score = scores.max().item()
         min_score = scores.min().item()
         for edge in self.edges.values():
