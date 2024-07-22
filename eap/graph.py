@@ -232,6 +232,16 @@ class Graph:
         s = torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
         return torch.sort(s).values if sort else s
 
+    def get_dst_nodes(self):
+        heads = []
+        for layer in range(self.cfg['n_layers']):
+            for letter in 'qkv':
+                for attention_head in range(self.cfg['n_heads']):
+                    heads.append(f'a{layer}.h{attention_head}<{letter}>')
+            heads.append(f'm{layer}')
+        heads.append('logits')
+        return heads
+
     def count_included_edges(self):
         return sum(edge.in_graph for edge in self.edges.values())
     
@@ -380,6 +390,16 @@ class Graph:
         graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
 
         return graph
+
+
+    def edge_matrices(self): 
+        edge_scores = torch.zeros((self.n_forward, self.n_backward))
+        edges_in_graph = torch.zeros((self.n_forward, self.n_backward)).bool()
+        for edge in self.edges.values():
+            edge_scores[self.forward_index(edge.parent, attn_slice=False), self.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)] = float(edge.score)
+            edges_in_graph[self.forward_index(edge.parent, attn_slice=False), self.backward_index(edge.child, qkv=edge.qkv, attn_slice=False)] = edge.in_graph
+            
+        return edge_scores, edges_in_graph
 
 
     def to_json(self, filename: str):
