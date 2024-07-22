@@ -301,11 +301,14 @@ class Graph:
         Args:
             n (int): the number of edges to include
             absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
-        a = abs if absolute else lambda x: x
         for node in self.nodes.values():
             node.in_graph = False
 
-        sorted_edges = torch.sort(self.scores.view(-1), descending=True).indices
+        scores = self.scores.view(-1)
+        if absolute:
+            scores = torch.abs(scores)
+
+        sorted_edges = torch.sort(scores, descending=True).indices
 
         self.in_graph.view(-1)[sorted_edges[:n]] = True
         self.in_graph.view(-1)[sorted_edges[n:]] = False
@@ -326,10 +329,8 @@ class Graph:
             reset (bool): whether to reset the in_graph attribute of all nodes and edges before applying the greedy search (defaults to True, you probably want to keep it that way)
             absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
         if reset:
-            for node in self.nodes.values():
-                node.in_graph = False 
-            for edge in self.edges.values():
-                edge.in_graph = False
+            self.nodes_in_graph *= False
+            self.in_graph *= False
             self.nodes['logits'].in_graph = True
 
         def abs_id(s: float):
