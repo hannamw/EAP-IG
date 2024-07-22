@@ -163,6 +163,7 @@ class Graph:
         scores (torch.Tensor): A tensor of the scores of the edges in the graph
         in_graph (torch.Tensor): A tensor of the in_graph attribute of the edges in the graph
         nodes_in_graph (torch.Tensor): A tensor of the in_graph attribute of the nodes in the graph
+        real_edge_mask (torch.Tensor): A tensor indicating if the edge at that position is real (some (fwd,bwd)) pairs refer to edges that aren't real
     """    
     nodes: Dict[str, Node]
     edges: Dict[str, Edge]
@@ -172,6 +173,7 @@ class Graph:
     scores: torch.Tensor
     in_graph: torch.Tensor
     nodes_in_graph: torch.Tensor
+    real_edge_mask: torch.Tensor
 
     def __init__(self):
         self.nodes = {}
@@ -182,6 +184,7 @@ class Graph:
     def add_edge(self, parent:Node, child:Node, qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
         edge = Edge(parent, child, self, qkv)
         self.edges[edge.name] = edge
+        self.real_edge_mask[edge.matrix_index] = 1
         parent.children.add(child)
         parent.child_edges.add(edge)
         child.parents.add(parent)
@@ -279,10 +282,10 @@ class Graph:
         return heads
 
     def count_included_edges(self):
-        return sum(edge.in_graph for edge in self.edges.values())
+        return self.in_graph.sum()
     
     def count_included_nodes(self):
-        return sum(node.in_graph for node in self.nodes.values())
+        return self.nodes_in_graph.sum()
 
     def apply_threshold(self, threshold: float, absolute: bool):
         """Apply a threshold to the graph, setting the in_graph attribute of edges to True if the score is above the threshold
@@ -292,21 +295,33 @@ class Graph:
         threshold = float(threshold)
         for node in self.nodes.values():
             node.in_graph = True 
-            
-        for edge in self.edges.values():
-            edge.in_graph = abs(edge.score) >= threshold if absolute else edge.score >= threshold
+
+        edge_scores = self.scores.view(-1)
+        if absolute:
+            edge_scores = torch.abs(edge_scores)
+        surpass_threshold = edge_scores >= threshold
+
+        self.in_graph[surpass_threshold] = True
+        self.in_graph[~surpass_threshold] = False
     
     def apply_topn(self, n:int, absolute: bool):
         """Apply a top n filter to the graph, setting the in_graph attribute of the n edges with the highest scores to True
         Args:
             n (int): the number of edges to include
             absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
+
+        if n > len(self.edges):
+            raise ValueError(f"n ({n}) is greater than the number of edges ({len(self.edges)})")
+        
         for node in self.nodes.values():
             node.in_graph = False
 
         scores = self.scores.view(-1)
         if absolute:
             scores = torch.abs(scores)
+
+        # masking out the edges that are not real
+        scores[~self.real_edge_mask.view(-1)] = -torch.inf 
 
         sorted_edges = torch.sort(scores, descending=True).indices
 
@@ -328,6 +343,10 @@ class Graph:
             n_edges (int): the number of edges to include
             reset (bool): whether to reset the in_graph attribute of all nodes and edges before applying the greedy search (defaults to True, you probably want to keep it that way)
             absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
+
+        if n_edges > len(self.edges):
+            raise ValueError(f"n ({n_edges}) is greater than the number of edges ({len(self.edges)})")
+        
         if reset:
             self.nodes_in_graph *= False
             self.in_graph *= False
@@ -393,6 +412,7 @@ class Graph:
         graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
 
         graph.scores = torch.zeros((graph.n_forward, graph.n_backward))
+        graph.real_edge_mask = torch.zeros((graph.n_forward, graph.n_backward)).bool()
         graph.in_graph = torch.zeros((graph.n_forward, graph.n_backward)).bool()
         graph.nodes_in_graph = torch.zeros(graph.n_forward + 1).bool()
         
