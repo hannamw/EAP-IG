@@ -43,10 +43,13 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
 
     # For each node in the graph, construct its input (in the case of attention heads, multiple inputs) by corrupting the incoming edges that are not in the circuit.
     # We assume that the corrupted cache is filled with corresponding corrupted activations, and that the mixed cache contains the computed activations from preceding nodes in this forward pass.
-    def make_input_construction_hook(act_index, activation_differences, in_graph_vector):
+    def make_input_construction_hook(activation_differences, in_graph_vector, attn=False):
         def input_construction_hook(activations, hook):
-            update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,'batch pos previous hidden, previous -> batch pos hidden')
-            activations[act_index] += update
+            if attn:
+                update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,'batch pos previous hidden, previous head -> batch pos head hidden')
+            else:
+                update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,'batch pos previous hidden, previous -> batch pos hidden')
+            activations += update
             return activations
         return input_construction_hook
 
@@ -55,16 +58,26 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     # AttentionNodes have 3 inputs to reconstruct
     def make_input_construction_hooks(activation_differences, in_graph_matrix):
         input_construction_hooks = []
-        for node in graph.nodes.values():
-            if isinstance(node, InputNode) or not node.in_graph:
-                continue
-            elif isinstance(node, LogitNode) or isinstance(node, MLPNode):
-                input_construction_hooks.append((node.in_hook, make_input_construction_hook(node.index, activation_differences, in_graph_matrix[:graph.prev_index(node), graph.backward_index(node)])))
-            elif isinstance(node, AttentionNode):
+        for layer in range(model.cfg.n_layers):
+            # add attention hooks:
+            if any(graph.nodes[f'a{layer}.h{head}'].in_graph for head in range(model.cfg.n_heads)):
                 for i, letter in enumerate('qkv'):
-                    input_construction_hooks.append((node.qkv_inputs[i], make_input_construction_hook(node.index, activation_differences, in_graph_matrix[:graph.prev_index(node), graph.backward_index(node, qkv=letter, attn_slice=False)])))
-            else:
-                raise ValueError(f"Invalid node: {node} of type {type(node)}")
+                    node = graph.nodes[f'a{layer}.h0']
+                    prev_index = graph.prev_index(node)
+                    bwd_index = graph.backward_index(node, qkv=letter, attn_slice=True)
+                    input_construction_hooks.append((node.qkv_inputs[i], make_input_construction_hook(activation_differences, in_graph_matrix[:prev_index, bwd_index], attn=True)))
+            # add MLP hook
+            if graph.nodes[f'm{layer}'].in_graph:
+                node = graph.nodes[f'm{layer}']
+                prev_index = graph.prev_index(node)
+                bwd_index = graph.backward_index(node)
+                input_construction_hooks.append((node.in_hook, make_input_construction_hook(activation_differences, in_graph_matrix[:prev_index, bwd_index])))
+        # Logit node input construction
+        node = graph.nodes[f'logits']
+        if node.in_graph:
+            prev_index = graph.prev_index(node)
+            bwd_index = graph.backward_index(node)
+            input_construction_hooks.append((node.in_hook, make_input_construction_hook(activation_differences, in_graph_matrix[:prev_index, bwd_index])))
         return input_construction_hooks
             
     # and here we actually run / evaluate the model
