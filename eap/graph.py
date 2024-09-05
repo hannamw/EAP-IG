@@ -1,3 +1,4 @@
+import time
 from typing import List, Dict, Union, Tuple, Literal, Optional, Set
 from collections import defaultdict
 from pathlib import Path 
@@ -26,20 +27,29 @@ class Node:
     children: Set['Node']
     child_edges: Set['Edge']
     in_graph: bool
+    graph: 'Graph'
     qkv_inputs: Optional[List[str]]
 
-    def __init__(self, name: str, layer:int, in_hook: List[str], out_hook: str, index: Tuple, qkv_inputs: Optional[List[str]]=None):
+    def __init__(self, name: str, layer:int, in_hook: List[str], out_hook: str, index: Tuple, graph: 'Graph', qkv_inputs: Optional[List[str]]=None):
         self.name = name
         self.layer = layer
         self.in_hook = in_hook
         self.out_hook = out_hook 
         self.index = index
-        self.in_graph = True
         self.parents = set()
         self.children = set()
         self.parent_edges = set()
         self.child_edges = set()
+        self.graph = graph
         self.qkv_inputs = qkv_inputs
+
+    @property
+    def in_graph(self):
+        return self.graph.nodes_in_graph[self.graph.forward_index(self, attn_slice=False)]
+
+    @in_graph.setter
+    def in_graph(self, value):
+        self.graph.nodes_in_graph[self.graph.forward_index(self, attn_slice=False)] = value
 
     def __eq__(self, other):
         return self.name == other.name
@@ -51,46 +61,54 @@ class Node:
         return hash(self.name)
 
 class LogitNode(Node):
-    def __init__(self, n_layers:int):
+    def __init__(self, n_layers:int, graph):
         name = 'logits' 
         index = slice(None) 
-        super().__init__(name, n_layers - 1, f"blocks.{n_layers - 1}.hook_resid_post", '', index)
+        super().__init__(name, n_layers - 1, f"blocks.{n_layers - 1}.hook_resid_post", '', index, graph)
         
 class MLPNode(Node):
-    def __init__(self, layer: int):
+    def __init__(self, layer: int, graph):
         name = f'm{layer}' 
         index = slice(None) 
-        super().__init__(name, layer, f"blocks.{layer}.hook_mlp_in", f"blocks.{layer}.hook_mlp_out", index)
+        super().__init__(name, layer, f"blocks.{layer}.hook_mlp_in", f"blocks.{layer}.hook_mlp_out", index, graph)
 
 class AttentionNode(Node):
     head: int
-    def __init__(self, layer:int, head:int):
+    def __init__(self, layer:int, head:int, graph):
         name = f'a{layer}.h{head}' 
         self.head = head
         index = (slice(None), slice(None), head) 
-        super().__init__(name, layer, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index, [f'blocks.{layer}.hook_{letter}_input' for letter in 'qkv'])
+        super().__init__(name, layer, f'blocks.{layer}.hook_attn_in', f"blocks.{layer}.attn.hook_result", index, graph, [f'blocks.{layer}.hook_{letter}_input' for letter in 'qkv'])
 
 class InputNode(Node):
-    def __init__(self):
+    def __init__(self, graph):
         name = 'input' 
         index = slice(None) 
-        super().__init__(name, 0, '', "hook_embed", index)  #"blocks.0.hook_resid_pre", index)
+        super().__init__(name, 0, '', "hook_embed", index, graph)  #"blocks.0.hook_resid_pre", index)
 
 class Edge:
+    """An Edge in a graph. 
+    Attributes:
+        name: (str): the edge's name, given as [PARENT]->[CHILD]<[OPTIONAL QKV>]; the latter applies only if [CHILD] is an AttentionNode
+        parent: (Node): the parent node of the edge
+        child: (Node): the child node of the edge
+        hook: (str): the hook into the child node
+        index: (Tuple): the index of the child node (only really relevant for AttentionNodes)
+        score: (Optional[float]): the score of the edge (given by an attribution method)
+        in_graph: (bool): whether the edge is in the graph or not"""
     name: str
     parent: Node 
     child: Node 
     hook: str
     index: Tuple
-    score : Optional[float]
-    in_graph: bool
-    def __init__(self, parent: Node, child: Node, qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
+    graph: 'Graph'
+    def __init__(self, parent: Node, child: Node, graph: 'Graph', qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
         self.name = f'{parent.name}->{child.name}' if qkv is None else f'{parent.name}->{child.name}<{qkv}>'
         self.parent = parent 
         self.child = child
         self.qkv = qkv
-        self.score = None
-        self.in_graph = True
+        self.graph = graph
+        self.matrix_index = (graph.forward_index(parent, attn_slice=False), graph.backward_index(child, qkv, attn_slice=False))
         if isinstance(child, AttentionNode):
             if qkv is None:
                 raise ValueError(f'Edge({self.name}): Edges to attention heads must have a non-none value for qkv.')
@@ -99,6 +117,7 @@ class Edge:
         else:
             self.index = child.index
             self.hook = child.in_hook
+
     def get_color(self):
         if self.qkv is not None:
             return EDGE_TYPE_COLORS[self.qkv]
@@ -106,6 +125,22 @@ class Edge:
             return "#FF0000"
         else:
             return "#000000"
+
+    @property
+    def score(self):
+        return self.graph.scores[self.matrix_index]
+    
+    @score.setter
+    def score(self, value):
+        self.graph.scores[self.matrix_index] = value
+    
+    @property
+    def in_graph(self):
+        return self.graph.in_graph[self.matrix_index]
+    
+    @in_graph.setter
+    def in_graph(self, value):
+        self.graph.in_graph[self.matrix_index] = value
 
     def __eq__(self, other):
         return self.name == other.name
@@ -117,11 +152,29 @@ class Edge:
         return hash(self.name)
 
 class Graph:
+    """
+    Represents a graph that consists of nodes and edges.
+
+    Attributes:
+        nodes (Dict[str, Node]): A dictionary of nodes in the graph, where the key is the node name and the value is the node object.
+        edges (Dict[str, Edge]): A dictionary of edges in the graph, where the key is the edge name and the value is the edge object.
+        n_forward (int): The number of forward nodes in the graph, i.e. the # of nodes whose output activations we care about
+        n_backward (int): The number of backward nodes/indices in the graph, i.e. the # of nodes whose input gradients we care about. Note that attention heads have 3 inputs that need to be dealt with during a backward pass
+        cfg (HookedTransformerConfig): The configuration object for the graph.
+        scores (torch.Tensor): A tensor of the scores of the edges in the graph
+        in_graph (torch.Tensor): A tensor of the in_graph attribute of the edges in the graph
+        nodes_in_graph (torch.Tensor): A tensor of the in_graph attribute of the nodes in the graph
+        real_edge_mask (torch.Tensor): A tensor indicating if the edge at that position is real (some (fwd,bwd)) pairs refer to edges that aren't real
+    """    
     nodes: Dict[str, Node]
     edges: Dict[str, Edge]
     n_forward: int 
     n_backward: int
     cfg: HookedTransformerConfig
+    scores: torch.Tensor
+    in_graph: torch.Tensor
+    nodes_in_graph: torch.Tensor
+    real_edge_mask: torch.Tensor
 
     def __init__(self):
         self.nodes = {}
@@ -130,19 +183,48 @@ class Graph:
         self.n_backward = 0
 
     def add_edge(self, parent:Node, child:Node, qkv:Union[None, Literal['q'], Literal['k'], Literal['v']]=None):
-        edge = Edge(parent, child, qkv)
+        edge = Edge(parent, child, self, qkv)
         self.edges[edge.name] = edge
+        self.real_edge_mask[edge.matrix_index] = 1
         parent.children.add(child)
         parent.child_edges.add(edge)
         child.parents.add(parent)
         child.parent_edges.add(edge)
 
-    def forward_index(self, node:Node, attn_slice=True):
+    def prev_index(self, node: Node) -> Union[int, slice]:
+        """Return the forward index before which all nodes contribute to the input of the given node
+        Args:
+            node (Node): The node to get the prev forward index of
+
+        Returns:
+            Union[int, slice]: an index representing the prev forward index of the node
+        """
         if isinstance(node, InputNode):
             return 0
         elif isinstance(node, LogitNode):
             return self.n_forward
-            # raise ValueError(f"No forward for logits node")
+        elif isinstance(node, MLPNode):
+            if self.cfg['parallel_attn_mlp']:
+                return 1 + node.layer * (self.cfg['n_heads'] + 1)
+            else:
+                return 1 + node.layer * (self.cfg['n_heads'] + 1) + self.cfg['n_heads']
+        elif isinstance(node, AttentionNode):
+            i =  1 + node.layer * (self.cfg['n_heads'] + 1)
+            return i
+        else:
+            raise ValueError(f"Invalid node: {node} of type {type(node)}")
+
+    def forward_index(self, node:Node, attn_slice=True):
+        """Return the forward index of the given node. Every node but the logits has a forward index, representing where in a tensor of n_forward x d_model activations the node's activations are stored.
+        Args:
+            node (Node): The node to get the forward index of
+            attn_slice (bool): whether to return a slice for the attention heads or an integer for the node
+        Returns:
+            Union[int, slice]: an index representing the forward index of the node"""
+        if isinstance(node, InputNode):
+            return 0
+        elif isinstance(node, LogitNode):
+            return self.n_forward
         elif isinstance(node, MLPNode):
             return 1 + node.layer * (self.cfg['n_heads'] + 1) + self.cfg['n_heads']
         elif isinstance(node, AttentionNode):
@@ -153,6 +235,13 @@ class Graph:
         
 
     def backward_index(self, node:Node, qkv=None, attn_slice=True):
+        """Return the backward index of the given node. Every node but the input node has a backward index, representing where in a tensor of n_backward x d_model activations the node's activations are stored. Note that because attention heads have 3 inputs, they correspondingly 3 backward indices, depending on which of q, k, or v you want.
+        Args:
+            node (Node): The node to get the backward index of
+            qkv (str): which of q, k, or v to get the backward index of
+            attn_slice (bool): whether to return a slice for the attention heads or an integer for the node
+        Returns:
+            Union[int, slice]: an index representing the backward index of the node"""
         if isinstance(node, InputNode):
             raise ValueError(f"No backward for input node")
         elif isinstance(node, LogitNode):
@@ -166,44 +255,102 @@ class Graph:
         else:
             raise ValueError(f"Invalid node: {node} of type {type(node)}")
 
-    def scores(self, nonzero=False, in_graph=False, sort=True):
-        s = torch.tensor([edge.score for edge in self.edges.values() if edge.score != 0 and (edge.in_graph or not in_graph)]) if nonzero else torch.tensor([edge.score for edge in self.edges.values()])
+    def get_scores(self, nonzero=False, in_graph=False, sort=True):
+        """Return the scores of the edges in the graph
+        Args:
+            nonzero (bool): whether to return only the nonzero scores
+            in_graph (bool): whether to return only the scores of the edges that are in the graph
+            sort (bool): whether to sort the scores before returning them
+        Returns:
+            torch.Tensor: a tensor of the scores of the edges in the graph"""
+        s = self.scores.view(-1)
+        valid = torch.ones_like(s, dtype=torch.bool)
+        if in_graph:
+            valid = valid & self.in_graph.view(-1)
+        if nonzero:
+            valid = valid & (s != 0)
+        s = s[valid]
         return torch.sort(s).values if sort else s
 
+    def get_dst_nodes(self):
+        heads = []
+        for layer in range(self.cfg['n_layers']):
+            for letter in 'qkv':
+                for attention_head in range(self.cfg['n_heads']):
+                    heads.append(f'a{layer}.h{attention_head}<{letter}>')
+            heads.append(f'm{layer}')
+        heads.append('logits')
+        return heads
+
     def count_included_edges(self):
-        return sum(edge.in_graph for edge in self.edges.values())
+        return self.in_graph.sum()
     
     def count_included_nodes(self):
-        return sum(node.in_graph for node in self.nodes.values())
+        return self.nodes_in_graph.sum()
 
     def apply_threshold(self, threshold: float, absolute: bool):
+        """Apply a threshold to the graph, setting the in_graph attribute of edges to True if the score is above the threshold
+        Args:
+            threshold (float): the threshold to apply
+            absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
         threshold = float(threshold)
         for node in self.nodes.values():
             node.in_graph = True 
-            
-        for edge in self.edges.values():
-            edge.in_graph = abs(edge.score) >= threshold if absolute else edge.score >= threshold
+
+        edge_scores = self.scores.view(-1)
+        if absolute:
+            edge_scores = torch.abs(edge_scores)
+        surpass_threshold = edge_scores >= threshold
+
+        self.in_graph[surpass_threshold] = True
+        self.in_graph[~surpass_threshold] = False
     
     def apply_topn(self, n:int, absolute: bool):
-        a = abs if absolute else lambda x: x
+        """Apply a top n filter to the graph, setting the in_graph attribute of the n edges with the highest scores to True
+        Args:
+            n (int): the number of edges to include
+            absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
+
+        if n > len(self.edges):
+            raise ValueError(f"n ({n}) is greater than the number of edges ({len(self.edges)})")
+        
         for node in self.nodes.values():
             node.in_graph = False
 
-        sorted_edges = sorted(list(self.edges.values()), key = lambda edge: a(edge.score), reverse=True)
-        for edge in sorted_edges[:n]:
-            edge.in_graph = True 
-            edge.parent.in_graph = True 
-            edge.child.in_graph = True 
+        scores = self.scores.view(-1)
+        if absolute:
+            scores = torch.abs(scores)
 
-        for edge in sorted_edges[n:]:
-            edge.in_graph = False
+        # masking out the edges that are not real
+        scores[~self.real_edge_mask.view(-1)] = -torch.inf 
 
-    def apply_greedy(self, n_edges, reset=True, absolute: bool=True):
+        sorted_edges = torch.sort(scores, descending=True).indices
+
+        self.in_graph.view(-1)[sorted_edges[:n]] = True
+        self.in_graph.view(-1)[sorted_edges[n:]] = False
+
+        # in graph if any outgoing edge is in graph
+        self.nodes_in_graph[:-1] = self.in_graph.any(dim=1)
+
+        # in graph if any incoming edge in in graph
+        for node in self.nodes.values():
+            if not node.in_graph:
+                node.in_graph = any(edge.in_graph for edge in node.parent_edges)
+
+
+    def apply_greedy(self, n_edges, reset=True, absolute: bool = True):
+        """Perform a greedy search on the graph, starting from the logits node and selecting the reachable edge with the highest score at each step (of n_edges). An edge is reachable if its child is in the graph; if an edge is selected but its parent is not in the graph, the parent is added.
+        Args:
+            n_edges (int): the number of edges to include
+            reset (bool): whether to reset the in_graph attribute of all nodes and edges before applying the greedy search (defaults to True, you probably want to keep it that way)
+            absolute (bool): whether to take the absolute value of the scores before applying the threshold"""
+
+        if n_edges > len(self.edges):
+            raise ValueError(f"n ({n_edges}) is greater than the number of edges ({len(self.edges)})")
+        
         if reset:
-            for node in self.nodes.values():
-                node.in_graph = False 
-            for edge in self.edges.values():
-                edge.in_graph = False
+            self.nodes_in_graph *= False
+            self.in_graph *= False
             self.nodes['logits'].in_graph = True
 
         def abs_id(s: float):
@@ -261,14 +408,22 @@ class Graph:
             graph.cfg = {'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp}
         else:
             graph.cfg = model_or_config
+
+        graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
+        graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
+
+        graph.scores = torch.zeros((graph.n_forward, graph.n_backward))
+        graph.real_edge_mask = torch.zeros((graph.n_forward, graph.n_backward)).bool()
+        graph.in_graph = torch.zeros((graph.n_forward, graph.n_backward)).bool()
+        graph.nodes_in_graph = torch.zeros(graph.n_forward + 1).bool()
         
-        input_node = InputNode()
+        input_node = InputNode(graph)
         graph.nodes[input_node.name] = input_node
         residual_stream = [input_node]
 
         for layer in range(graph.cfg['n_layers']):
-            attn_nodes = [AttentionNode(layer, head) for head in range(graph.cfg['n_heads'])]
-            mlp_node = MLPNode(layer)
+            attn_nodes = [AttentionNode(layer, head, graph) for head in range(graph.cfg['n_heads'])]
+            mlp_node = MLPNode(layer, graph)
             
             for attn_node in attn_nodes: 
                 graph.nodes[attn_node.name] = attn_node 
@@ -295,26 +450,44 @@ class Graph:
                     graph.add_edge(node, mlp_node)
                 residual_stream.append(mlp_node)
                         
-        logit_node = LogitNode(graph.cfg['n_layers'])
+        logit_node = LogitNode(graph.cfg['n_layers'], graph)
         for node in residual_stream:
             graph.add_edge(node, logit_node)
             
         graph.nodes[logit_node.name] = logit_node
 
-        graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
-        graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
-
         return graph
 
 
-    def to_json(self, filename):
+    def to_json(self, filename: str):
+        """Save the graph to a json file
+        Args:
+            filename (str): the filename to save the graph to"""
         # non serializable info
         d = {'cfg':self.cfg, 'nodes': {str(name): bool(node.in_graph) for name, node in self.nodes.items()}, 'edges':{str(name): {'score': None if edge.score is None else float(edge.score), 'in_graph': bool(edge.in_graph)} for name, edge in self.edges.items()}}
         with open(filename, 'w') as f:
             json.dump(d, f)
 
+    def to_pt(self, filename: str):
+        """Save the graph to a torch file
+        Args:
+            filename (str): the filename to save the graph to"""
+        #src_nodes = {node.name: node.in_graph for node in self.nodes.values() if not isinstance(node, LogitNode)}
+        # dst_nodes = self.get_dst_nodes()
+        edge_scores, edges_in_graph = self.scores, self.in_graph
+        d = {'cfg':self.cfg, #'src_nodes': src_nodes, 'dst_nodes': dst_nodes, 
+             'edges': edge_scores, 'edges_in_graph': edges_in_graph, 'nodes_in_graph': self.nodes_in_graph}
+        torch.save(d, filename)
+
     @classmethod
     def from_json(cls, filename):
+        """
+        Load a Graph object from a JSON file.
+        The JSON should have the following keys:
+        1. 'cfg': Configuration dictionary, containing similar values to a TLens configuration object.
+        2. 'nodes': Dict[str, bool] which maps a node name (i.e. 'm11' or 'a0.h11') to a boolean value, indicating if the node is part of the circuit.
+        3. 'edges': Dict[str, Dict] which maps an edge name ('node->node') to a dictionary contains values 
+        """
         with open(filename, 'r') as f:
             d = json.load(f)
         g = Graph.from_model(d['cfg'])
@@ -324,6 +497,40 @@ class Graph:
         for name, info in d['edges'].items():
             g.edges[name].score = info['score']
             g.edges[name].in_graph = info['in_graph']
+
+        return g
+    
+    @classmethod
+    def from_pt(cls, filename, verbose=False):
+        """Load a graph object from a pytorch-serialized file.
+        The file should contain a dict with the following items -
+        1. 'cfg': Configuration dictionary, containing similar values to a TLens configuration object.
+        2. 'src_nodes': Dict[str, bool] which maps a node name (i.e. 'm11' or 'a0.h11') to a boolean value, indicating if the node is part of the circuit.
+        3. 'dst_nodes': List[str] containing the names of the possible destination nodes, in the same order as the edges tensor.
+        4. 'edges': torch.tensor[n_src_nodes, n_dst_nodes], where each value in (src, dst) represents the edge score between the src node and dst node.
+        5. 'edges_in_graph': torch.tensor[n_src_nodes, n_dst_nodes], where each value in (src, dst) represents if the edge is in the graph or not.
+        """
+        d = torch.load(filename)
+        assert all([k in d.keys() for k in ['cfg', 'edges', 'edges_in_graph']]), f"Bad torch circuit file format. Found keys - {d.keys()}, missing keys - {set(['cfg', 'edges', 'edges_in_graph']) - set(d.keys())}"
+        #assert d['edges'].shape == d['edges_in_graph'].shape == (len(d['src_nodes']), len(d['dst_nodes'])), "Bad edges array shape"
+
+        if verbose:
+            s = time.time()
+
+        g = Graph.from_model(d['cfg'])
+        
+        if verbose:
+            print(f'Loaded graph in {time.time() - s:.2f}s')
+
+        if 'nodes_in_graph' in d:
+            g.nodes_in_graph = d['nodes_in_graph']
+        else:
+            for name, in_graph in d['src_nodes'].items():
+                g.nodes[name].in_graph = in_graph
+
+        # Enumerate over the tensor and fill the edge values in the graph
+        g.scores = d['edges']
+        g.in_graph = d['edges_in_graph']        
 
         return g
     
@@ -350,6 +557,7 @@ class Graph:
         seed: Optional[int] = None
     ) -> pgv.AGraph:
         """
+        Convert the graph to a pygraphviz graph object for visualization.
         Colorscheme: a cmap colorscheme
         """
         g = pgv.AGraph(directed=True, bgcolor="white", overlap="false", splines="true", layout=layout)
@@ -369,7 +577,7 @@ class Graph:
                         fontname="Helvetica",
                         )
 
-        scores = self.scores().abs()
+        scores = self.get_scores().abs()
         max_score = scores.max().item()
         min_score = scores.min().item()
         for edge in self.edges.values():

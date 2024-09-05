@@ -10,8 +10,19 @@ def model2family(model_name: str):
         return 'gpt2'
     elif 'pythia' in model_name:
         return 'pythia'
+    elif 'llama-3' in model_name.lower():
+        return 'llama-3'
+    elif 'qwen2' in model_name.lower():
+        return 'qwen2'
+    elif 'gemma' in model_name.lower():
+        return 'gemma'
     else:
         raise ValueError(f"Couldn't find model family for model: {model_name}")
+    
+space_sep_models = {'gemma-2'}
+def tokenizer_space_separate(tokenizer_or_model_name: str):
+    return any(space_sep_model in tokenizer_or_model_name.lower() for space_sep_model in space_sep_models)
+
 
 def kl_div(logits, clean_logits, input_length, labels, mean=True):
     batch_size = logits.size(0)
