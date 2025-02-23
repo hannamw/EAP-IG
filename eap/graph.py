@@ -130,12 +130,22 @@ class InputNode(Node):
         super().__init__(name, 0, '', "hook_embed", index, graph)
 
 class Edge:
-    graph: 'Graph'
+    """An Edge in a graph. 
+    Attributes:
+        name: (str): the edge's name, given as [PARENT]->[CHILD]<[OPTIONAL QKV>]; the latter applies only if [CHILD] is an AttentionNode
+        parent: (Node): the parent node of the edge
+        child: (Node): the child node of the edge
+        hook: (str): the hook into the child node
+        index: (Tuple): the index of the child node (only really relevant for AttentionNodes)
+        score: (Optional[float]): the score of the edge (given by an attribution method)
+        in_graph: (bool): whether the edge is in the graph or not"""
+
     name: str
     parent: Node 
     child: Node 
     hook: str
     index: Tuple
+      graph: 'Graph'
     def __init__(self, graph: 'Graph', parent: Node, child: Node, qkv:Optional[Literal["q", "k", "v"]]=None):
         self.graph = graph
         self.name = f'{parent.name}->{child.name}' if qkv is None else f'{parent.name}->{child.name}<{qkv}>'
@@ -181,6 +191,16 @@ class GraphConfig(dict):
         self.__dict__ = self
 
 class Graph:
+    """
+    Represents a graph that consists of nodes and edges.
+
+    Attributes:
+        nodes (Dict[str, Node]): A dictionary of nodes in the graph, where the key is the node name and the value is the node object.
+        edges (Dict[str, Edge]): A dictionary of edges in the graph, where the key is the edge name and the value is the edge object.
+        n_forward (int): The number of forward nodes in the graph, i.e. the # of nodes whose output activations we care about
+        n_backward (int): The number of backward nodes/indices in the graph, i.e. the # of nodes whose input gradients we care about. Note that attention heads have 3 inputs that need to be dealt with during a backward pass
+        cfg (HookedTransformerConfig): The configuration object for the graph.
+    """
     nodes: Dict[str, Node]  # Maps from node names ('input', 'a0.h0', 'm0', 'logits', etc.) to Node objects
     edges: Dict[str, Edge]  # Maps from edge names ('input->a0.h0', 'a0.h0->m0', etc.) to Edge objects. Attn edges are denoted as 'input->a0.h0<q>', 'input->a0.h0<k>', 'input->a0.h0<v>'
     n_forward: int  # the number of forward (source) nodes
@@ -209,7 +229,7 @@ class Graph:
         parent.child_edges.add(edge)
         child.parents.add(parent)
         child.parent_edges.add(edge)
-        
+
         
     def prev_index(self, node: Node) -> Union[int, slice]:
         """Return the forward index before which all nodes contribute to the input of the given node
@@ -244,7 +264,7 @@ class Graph:
     @classmethod
     def _forward_index(cls, cfg, node_name:str, attn_slice:bool=False) -> int:
         """Given a model's config and a node specification, return the forward (source) index of the node in the graph. The forward index is the index of the node in the forward pass of the model, which is used to index into the graph's tensors.
-
+        
         Args:
             cfg (_type_): a (HookedTransformer) config object
             node_name (str): Name of the node: 'input', 'logits', 'm0', 'a0.h0', etc.
@@ -337,7 +357,6 @@ class Graph:
     
     def reset(self, empty=True):
         """Resets the graph, setting everything to zero. If empty is False, sets everything to True instead.
-
         Args:
             empty (bool, optional): If true, removes everything from graph; otherwise adds everything. Defaults to True.
         """
@@ -355,12 +374,14 @@ class Graph:
                 
     def apply_threshold(self, threshold: float, absolute: bool, reset: bool=True, level:Literal['edge','node','neuron']='edge', prune=True):
         """Apply a threshold to the graph, setting the in_graph attribute of edges/nodes/neurons to True if the score is above the threshold. If a node or neuron has no score, it's assumed to always be in the graph.
+        
         Args:
             threshold (float): the threshold to apply
             absolute (bool): whether to take the absolute value of the scores before applying the threshold
             reset (bool): resets the graph, setting everything to zero, before applying topn. Only if reset=True will corresponding outgoing edges be added after neuron and node topn
             level (str, optional): level at which to apply topn. Defaults to 'edge'.
             prune (bool): whether to prune the graph after applying topn"""
+
         threshold = float(threshold)
         if reset:
             self.reset()
@@ -706,6 +727,16 @@ class Graph:
             d['neurons_scores'] = self.neurons_scores
         torch.save(d, filename)
 
+    def to_pt(self, filename: str):
+        """Save the graph to a torch file
+        Args:
+            filename (str): the filename to save the graph to"""
+        src_nodes = {node.name: node.in_graph for node in self.nodes.values() if not isinstance(node, LogitNode)}
+        dst_nodes = self.get_dst_nodes()
+        edge_scores, edges_in_graph = self.edge_matrices()
+        d = {'cfg':self.cfg, 'src_nodes': src_nodes, 'dst_nodes': dst_nodes, 'edges': edge_scores, 'edges_in_graph': edges_in_graph}
+        torch.save(d, filename)
+
     @classmethod
     def from_json(cls, json_path: str) -> 'Graph':
         """
@@ -792,6 +823,7 @@ class Graph:
         layout: str="dot",
         seed: Optional[int] = None
     ) -> pgv.AGraph:
+
         """Export the graph as a .png file
         
         Filename: the filename to save the graph to

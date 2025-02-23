@@ -56,6 +56,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
     else:
         activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
 
+
     fwd_hooks_clean = []
     fwd_hooks_corrupted = []
     bwd_hooks = []
@@ -93,8 +94,6 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
 
         """
         grads = gradients.detach()
-        print('grads for', hook.name, grads.size())
-        #print(grads)
         try:
             if grads.ndim == 3:
                 grads = grads.unsqueeze(2)
@@ -379,7 +378,6 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
 
         with model.hooks(fwd_hooks=fwd_hooks_clean):
             clean_logits = model(clean_tokens, attention_mask=attention_mask)
-
             activation_difference += activations_corrupted.clone().detach() - activations_clean.clone().detach()
 
         def output_interpolation_hook(k: int, clean: torch.Tensor, corrupted: torch.Tensor):
@@ -429,6 +427,7 @@ def get_scores_clean_corrupted(model: HookedTransformer, graph: Graph, dataloade
     Returns:
         _type_: _description_
     """
+
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
     total_items = 0
@@ -499,3 +498,4 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
         scores /= model.cfg.d_model
         
     graph.scores[:] =  scores.to(graph.scores.device)
+
