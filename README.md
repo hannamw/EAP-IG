@@ -13,10 +13,6 @@ This EAP implementation contains the following files:
 
 Note that the repo is now intended to work with `transformer-lens=2.0.0` and will also probably work with most recent-ish `1.X.Y` versions. Because of a bug with `attention.hook_result`, I can't yet upgrade to the newest version of TransformerLens (but would like to do this soon)!
 
-This repo owes a lot to:
-- [The original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular for its conceptualization of the graph and its visualization—go check it out!
-- [Aaquib Syed's original EAP implementation](https://github.com/Aaquib111/edge-attribution-patching/tree/minimal-implementation), for its memory efficient implementation of EAP
-
 I recently updated this repo with a few improvements (v0.2.0); for the old version of this repo, please check out branch 0.1.0. The changes made are the following:
 - Added a bunch of variants on EAP-IG, including the following. Find a comparison of these methods in [my paper introducing EAP-IG](https://arxiv.org/abs/2403.17806); long story short, either `EAP-IG` or `clean-corrupted` is probably best:
     - EAP, without any integrated gradients (`EAP`)
@@ -33,3 +29,7 @@ I recently updated this repo with a few improvements (v0.2.0); for the old versi
 - Added a `requirements.txt` file, as well as an `environment.yml` file. I used conda to handle my virtual environments, so the latter might work better.
 - Removed the dependency on `cmapy`, because cmapy isn't updated to work with newer versions of matplotlib; full disclosure, some of the `visualization.py` code thus comes directly from `cmapy`, just updated a little. This is also nice because it removes the need to download `cmapy`'s dependencies.
 - Added more comments (but more documentation is still needed!)
+
+This repo owes a lot to:
+- [The original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular for its conceptualization of the graph and its visualization—go check it out!
+- [Aaquib Syed's original EAP implementation](https://github.com/Aaquib111/edge-attribution-patching/tree/minimal-implementation), for its memory efficient implementation of EAP

@@ -4,6 +4,6 @@ setup(
     name='eap',
     author='Michael Hanna',
     author_email='mh2parker@gmail.com',
-    version='0.2.0',
+    version='1.0.0',
     packages=find_packages(include=['eap',])
 )

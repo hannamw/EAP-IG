@@ -145,7 +145,7 @@ class Edge:
     child: Node 
     hook: str
     index: Tuple
-      graph: 'Graph'
+    graph: 'Graph'
     def __init__(self, graph: 'Graph', parent: Node, child: Node, qkv:Optional[Literal["q", "k", "v"]]=None):
         self.graph = graph
         self.name = f'{parent.name}->{child.name}' if qkv is None else f'{parent.name}->{child.name}<{qkv}>'
