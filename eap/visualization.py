@@ -7,7 +7,6 @@ import matplotlib
 import matplotlib.cm
 
 
-
 EDGE_TYPE_COLORS = {
     'q': "#FF00FF", # Purple
     'k': "#00FF00", # Green

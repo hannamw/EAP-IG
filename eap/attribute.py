@@ -9,7 +9,7 @@ from transformer_lens.utils import get_attention_mask
 from tqdm import tqdm
 from einops import einsum
 
-from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
+from .graph import Graph, LogitNode, AttentionNode
 
 def tokenize_plus(model: HookedTransformer, inputs: List[str], max_length: Optional[int] = None):
     """

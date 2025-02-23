@@ -1,6 +1,4 @@
 from typing import Callable, List, Union, Literal, Optional
-import math
-from functools import partial
 
 import torch
 from torch import Tensor

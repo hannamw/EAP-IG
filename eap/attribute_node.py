@@ -1,4 +1,4 @@
-from typing import Callable, List, Union, Optional, Literal
+from typing import Callable, Union, Optional, Literal
 from functools import partial
 
 import torch
@@ -9,7 +9,7 @@ from transformer_lens.hook_points import HookPoint
 from tqdm import tqdm
 from einops import einsum
 
-from .graph import Graph, InputNode, LogitNode, AttentionNode, MLPNode
+from .graph import Graph
 from .attribute import tokenize_plus, compute_mean_activations
 
 
