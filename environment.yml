@@ -2,8 +2,10 @@ name: eap-ig
 channels:
   - pytorch
   - nvidia
-  - conda-forge
   - defaults
+  - conda-forge
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
 dependencies:
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
@@ -119,8 +121,8 @@ dependencies:
   - pygments=2.18.0=pyhd8ed1ab_0
   - pygraphviz=1.13=py310h832c5ef_1
   - python=3.10.13=hd12c33a_1_cpython
+  - python-dateutil=2.9.0.post0=pyhff2d567_1
   - python_abi=3.10=4_cp310
-  - pytorch=2.3.1=py3.10_cuda11.8_cudnn8.7.0_0
   - pytorch-cuda=11.8=h7e8668a_5
   - pytorch-mutex=1.0=cuda
   - pyyaml=6.0.1=py310h5eee18b_0
@@ -130,10 +132,8 @@ dependencies:
   - six=1.16.0=pyh6c4a22f_0
   - sqlite=3.45.3=h5eee18b_0
   - stack_data=0.6.2=pyhd8ed1ab_0
-  - sympy=1.12=py310h06a4308_0
   - tbb=2021.8.0=hdb19cb5_0
   - tk=8.6.14=h39e8969_0
-  - torchtriton=2.3.1=py310
   - tornado=6.4.1=py310hc51659f_0
   - traitlets=5.14.3=pyhd8ed1ab_0
   - typing_extensions=4.11.0=py310h06a4308_0
@@ -179,10 +179,10 @@ dependencies:
       - fsspec==2024.5.0
       - gitdb==4.0.11
       - gitpython==3.1.43
-      - huggingface-hub==0.23.4
+      - huggingface-hub==0.29.1
       - idna==3.7
       - ipywidgets==8.1.3
-      - jaxtyping==0.2.31
+      - jaxtyping==0.2.38
       - jupyterlab-widgets==3.0.11
       - kiwisolver==1.4.5
       - markdown-it-py==3.0.0
@@ -191,13 +191,23 @@ dependencies:
       - multidict==6.0.5
       - multiprocess==0.70.16
       - numpy==1.26.4
+      - nvidia-cublas-cu11==11.11.3.6
+      - nvidia-cuda-cupti-cu11==11.8.87
+      - nvidia-cuda-nvrtc-cu11==11.8.89
+      - nvidia-cuda-runtime-cu11==11.8.89
+      - nvidia-cudnn-cu11==9.1.0.70
+      - nvidia-cufft-cu11==10.9.0.58
+      - nvidia-curand-cu11==10.3.0.86
+      - nvidia-cusolver-cu11==11.4.1.48
+      - nvidia-cusparse-cu11==11.7.5.86
+      - nvidia-nccl-cu11==2.21.5
+      - nvidia-nvtx-cu11==11.8.86
       - pandas==2.2.2
       - pillow==10.4.0
       - protobuf==5.27.2
       - pyarrow==16.1.0
       - pyarrow-hotfix==0.6
       - pyparsing==3.1.2
-      - python-dateutil==2.9.0.post0
       - pytz==2024.1
       - regex==2024.5.15
       - requests==2.32.3
@@ -207,14 +217,20 @@ dependencies:
       - sentry-sdk==2.8.0
       - setproctitle==1.3.3
       - smmap==5.0.1
-      - tokenizers==0.19.1
+      - sympy==1.13.1
+      - tokenizers==0.21.0
+      - torch==2.6.0+cu118
       - tqdm==4.66.4
-      - transformer-lens==2.0.0
-      - transformers==4.42.3
-      - typeguard==2.13.3
+      - transformer-lens==2.6.0
+      - transformers==4.49.0
+      - transformers-stream-generator==0.0.5
+      - triton==3.2.0
+      - typeguard==4.4.2
       - tzdata==2024.1
       - urllib3==2.2.2
+      - wadler-lindig==0.1.3
       - wandb==0.17.4
       - widgetsnbextension==4.0.11
       - xxhash==3.4.1
       - yarl==1.9.4
+prefix: /home/ubuntu/miniconda3/envs/eap-ig

@@ -1,3 +1,4 @@
+from typing import Optional, Literal
 import sys
 import functools 
 
@@ -6,13 +7,20 @@ import matplotlib
 import matplotlib.cm
 
 
-
 EDGE_TYPE_COLORS = {
     'q': "#FF00FF", # Purple
     'k': "#00FF00", # Green
     'v': "#0000FF", # Blue
     None: "#000000", # Black
 }
+
+def get_color(qkv: Optional[Literal['q','k','v']], score:float):
+    if qkv is not None:
+        return EDGE_TYPE_COLORS[qkv]
+    elif score < 0:
+        return "#FF0000"
+    else:
+        return "#000000"
 
 def generate_random_color(colorscheme: str) -> str:
     """
