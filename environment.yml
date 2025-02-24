@@ -54,7 +54,6 @@ dependencies:
   - ipykernel=6.29.5=pyh3099207_0
   - ipython=8.26.0=pyh707e725_0
   - jedi=0.19.1=pyhd8ed1ab_0
-  - jinja2=3.1.4=py310h06a4308_0
   - jupyter_client=8.6.2=pyhd8ed1ab_0
   - jupyter_core=5.7.2=py310hff52083_0
   - keyutils=1.6.1=h166bdaf_0
@@ -128,13 +127,11 @@ dependencies:
   - pyyaml=6.0.1=py310h5eee18b_0
   - pyzmq=26.0.3=py310h6883aea_0
   - readline=8.2=h5eee18b_0
-  - setuptools=69.5.1=py310h06a4308_0
   - six=1.16.0=pyh6c4a22f_0
   - sqlite=3.45.3=h5eee18b_0
   - stack_data=0.6.2=pyhd8ed1ab_0
   - tbb=2021.8.0=hdb19cb5_0
   - tk=8.6.14=h39e8969_0
-  - tornado=6.4.1=py310hc51659f_0
   - traitlets=5.14.3=pyhd8ed1ab_0
   - typing_extensions=4.11.0=py310h06a4308_0
   - wcwidth=0.2.13=pyhd8ed1ab_0
@@ -158,7 +155,8 @@ dependencies:
   - zstd=1.5.6=ha6fb4c9_0
   - pip:
       - accelerate==0.32.1
-      - aiohttp==3.9.5
+      - aiohappyeyeballs==2.4.6
+      - aiohttp==3.11.12
       - aiosignal==1.3.1
       - async-timeout==4.0.3
       - attrs==23.2.0
@@ -183,6 +181,7 @@ dependencies:
       - idna==3.7
       - ipywidgets==8.1.3
       - jaxtyping==0.2.38
+      - jinja2==3.1.5
       - jupyterlab-widgets==3.0.11
       - kiwisolver==1.4.5
       - markdown-it-py==3.0.0
@@ -204,6 +203,7 @@ dependencies:
       - nvidia-nvtx-cu11==11.8.86
       - pandas==2.2.2
       - pillow==10.4.0
+      - propcache==0.3.0
       - protobuf==5.27.2
       - pyarrow==16.1.0
       - pyarrow-hotfix==0.6
@@ -216,10 +216,12 @@ dependencies:
       - sentencepiece==0.2.0
       - sentry-sdk==2.8.0
       - setproctitle==1.3.3
+      - setuptools==75.8.0
       - smmap==5.0.1
       - sympy==1.13.1
       - tokenizers==0.21.0
       - torch==2.6.0+cu118
+      - tornado==6.4.2
       - tqdm==4.66.4
       - transformer-lens==2.6.0
       - transformers==4.49.0
@@ -232,5 +234,5 @@ dependencies:
       - wandb==0.17.4
       - widgetsnbextension==4.0.11
       - xxhash==3.4.1
-      - yarl==1.9.4
+      - yarl==1.18.3
 prefix: /home/ubuntu/miniconda3/envs/eap-ig
