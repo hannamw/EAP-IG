@@ -289,6 +289,63 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
 
     return scores
 
+def get_scores_clean_corrupted(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], quiet:bool=False, neuron:bool=False):
+    """Gets edge attribution scores using EAP with integrated gradients.
+
+    Args:
+        model (HookedTransformer): The model to attribute
+        graph (Graph): Graph to attribute
+        dataloader (DataLoader): The data over which to attribute
+        metric (Callable[[Tensor], Tensor]): metric to attribute with respect to
+        steps (int, optional): number of IG steps. Defaults to 30.
+        quiet (bool, optional): suppress tqdm output. Defaults to False.
+
+    Returns:
+        Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
+    """
+    if neuron:
+        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device='cuda', dtype=model.cfg.dtype)    
+    else:
+        scores = torch.zeros((graph.n_forward), device='cuda', dtype=model.cfg.dtype)    
+    
+    total_items = 0
+    dataloader = dataloader if quiet else tqdm(dataloader)
+    for clean, corrupted, label in dataloader:
+        batch_size = len(clean)
+        total_items += batch_size
+        clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, clean)
+        corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
+
+        # Here, we get our fwd / bwd hooks and the activation difference matrix
+        # The forward corrupted hooks add the corrupted activations to the activation difference matrix
+        # The forward clean hooks subtract the clean activations 
+        # The backward hooks get the gradient, and use that, plus the activation difference, for the scores
+        (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference = make_hooks_and_matrices(model, graph, batch_size, n_pos, scores, neuron=neuron)
+
+        with torch.inference_mode():
+            with model.hooks(fwd_hooks=fwd_hooks_corrupted):
+                _ = model(corrupted_tokens, attention_mask=attention_mask)
+
+            with model.hooks(fwd_hooks=fwd_hooks_clean):
+                clean_logits = model(clean_tokens, attention_mask=attention_mask)
+
+        total_steps = 2
+        with model.hooks(bwd_hooks=bwd_hooks):
+            logits = model(clean_tokens, attention_mask=attention_mask)
+            metric_value = metric(logits, clean_logits, input_lengths, label)
+            metric_value.backward()
+            model.zero_grad()
+
+            logits = model(corrupted_tokens, attention_mask=attention_mask)
+            metric_value = metric(logits, clean_logits, input_lengths, label)
+            metric_value.backward()
+            model.zero_grad()
+
+    scores /= total_items
+    scores /= total_steps
+
+    return scores
+
 allowed_aggregations = {'sum', 'mean'}#, 'l2'}        
 def attribute_node(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], method: Literal['EAP', 'EAP-IG-inputs', 'EAP-IG-activations'], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', aggregation='sum', ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet:bool=False, neuron:bool=False):
     assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"

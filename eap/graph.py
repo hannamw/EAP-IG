@@ -372,7 +372,7 @@ class Graph:
             if self.neurons_in_graph is not None:
                 self.neurons_in_graph[:] = True
                 
-    def apply_threshold(self, threshold: float, absolute: bool, reset: bool=True, level:Literal['edge','node','neuron']='edge', prune=True):
+    def apply_threshold(self, threshold: float, absolute: bool=True, reset: bool=True, level:Literal['edge','node','neuron']='edge', prune=True):
         """Apply a threshold to the graph, setting the in_graph attribute of edges/nodes/neurons to True if the score is above the threshold. If a node or neuron has no score, it's assumed to always be in the graph.
         
         Args:
@@ -441,7 +441,7 @@ class Graph:
         if prune:
             self.prune()
     
-    def apply_topn(self, n:int, absolute: bool, level:Literal['edge','node','neuron']='edge', reset: bool=True, prune:bool=True):
+    def apply_topn(self, n:int, absolute: bool=True, level:Literal['edge','node','neuron']='edge', reset: bool=True, prune:bool=True):
         """Sets the graph to contain only the top-n components. The components are specified by the level parameter, which can be 'edge','node', or 'neuron'. If 'node', the top-n nodes are selected based on their scores, and all outgoing edges to nodes in the graph are true. If 'edge', the top-n edges are selected based on their scores. If 'neuron', the top-n neurons are selected based on their scores, and all outgoing edges to nodes with neurons in the graph are true.
 
         Args:
@@ -529,7 +529,7 @@ class Graph:
         if prune:
             self.prune()
 
-    def apply_greedy(self, n_edges:int, reset:bool = True, absolute: bool = True, prune:bool = True):
+    def apply_greedy(self, n_edges:int, absolute: bool = True, reset:bool = True, prune:bool = True):
         """
         Gets the topn edges of the graph using a greedy algorithm that works from the logits up. Only defined over edges
         

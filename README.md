@@ -1,34 +1,40 @@
 # EAP-IG
-This repo contains an implementation of [Edge Attribution Patching with Integrated Gradients (EAP-IG)](https://arxiv.org/abs/2403.17806), inspired by the [original paper](https://arxiv.org/abs/1703.01365) on integrated gradients for gradient-based input attribution. It allows you to efficiently score edges by their importance to a task, and define circuits based on those scores. EAP-IG is based on Edge Attribution Patching (EAP; see this [blog post](https://www.neelnanda.io/mechanistic-interpretability/attribution-patching) and [this paper](https://arxiv.org/abs/2310.10348) for details). Compared to EAP, EAP-IG finds more faithful circuits, and for the use of KL divergence as a metric. Other fun additions in this repo include finding circuits in a scored computational graph using greedy search, and evaluating the circuit you've found, to test its faithfulness. For more details on EAP-IG, see [Have Faith in Faithfulness: Going Beyond Circuit Overlap When Finding Model Mechanisms
-](https://arxiv.org/abs/2403.17806)
+This library contains various resources for finding circuits in autoregressive transformer LMs. At a high level, a circuit is the part of your model responsible for performing a given task; all nodes / edges outside the circuit can be corrupted without harming model performance. For more on circuits, see [this paper](https://arxiv.org/abs/2403.17806 ) or [this paper](https://arxiv.org/abs/2403.19647). For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`.
 
-For a small demo of all these features, check out `greater_than.ipynb`. This repo is a work in progress, but feel free to contact me with any questions!
+This library has tools that will let you do a variety of things:
+- Construct a `Graph` object representing the computational graph of most autoregressive transformer LMs in the [TransformerLens library](https://github.com/TransformerLensOrg/TransformerLens). Computational graphs can be drawn at the following levels:
+    - **Node and edge (default)**: Nodes are model components (attention heads and MLPs), and edges are connections between them (across layers, via the residual stream)
+    - **Node**: The graph contains only nodes, and we disregard the edges. This is equivalent to saying that for every node in the circuit, all of its outgoing edges are also in the circuit.
+    - **Neuron**: The graph contains only nodes, split into neurons. That is, you can include individual neurons, or output dimensions of a given component. 
+- Use attribution-based circuit-finding methods to produce scores (indirect effect estimates) for each node or edge in the computational graph. The attribution methods supported are:
+    - [Edge Attribution Patching (EAP)](https://arxiv.org/abs/1703.01365): Computes a first-order approximation of the indirect effect of each edge, i.e. the amount that your loss changes upon corrupting the edge. Essentially multiplies the change in component outputs by the gradient on clean inputs. Runs in O(1) time. See the [original blog post](https://www.neelnanda.io/mechanistic-interpretability/attribution-patching) for more info.
+    - [Edge Attribution Patching with Integrated Gradients (EAP-IG, inputs)](https://arxiv.org/abs/2403.17806): An adaptation of EAP that improves circuit quality by averaging the gradient computation over *m* steps taken between the clean and corrupted inputs, as in the [integrated gradients paper](https://arxiv.org/abs/1703.01365). Takes O(*m*) time.
+    - [Edge Attribution Patching with Integrated Gradients (EAP-IG, activations)](): Another adaptation of EAP using integrated gradients; instead of taking the gradient when the input embeddings are interpolated between the clean and corrupted inputs, it interpolates between the clean/corrupted activations for each component. This takes longer (O(*m * L*) time, given an *L*-layer model), but is somewhat more principled, and allows for estimating zero / mean ablation effects as well (just like EAP).
+    - [Clean-Corrupted](https://arxiv.org/abs/2403.17806): A variant of EAP/-IG that takes the gradient at two steps: the clean and corrupted input.
+- Use either a greedy-search or top-n approach to find a circuit of a given size based on these scores
+- Evaluate your circuit's performance (allowing you to compute its faithfulness)
 
-This EAP implementation contains the following files:
+## How to use this library
+To use this library, first create a working conda environment using `environment.yml`. For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`. In general, the circuit-finding pipeline looks like this:
+- Define a task with clean and corrupted inputs, a label associated with the clean inputs, and a metric measuring model performance. (`dataloader = EAPDataset('greater-than').to_dataloader()`, `metric = ...`)
+- Define your model's computation graph at the desired level of granularity. (`graph = Graph.from_model(model)`)
+- Use an attribution method to estimate the change in the metric that would occur if you were to corrupted / mean-ablate / zero-ablate each unit in your computation graph (i.e., estimate each unit's indirect effect). (`attribute(model, graph, dataloader, metric, method='EAP-IG-inputs', ig_steps=5)`)
+- Using the indirect effects / scores calculated, define a circuit by taking the top-n edges / nodes / neurons of your graph. (`graph.apply_topn(n)`)
+- Evaluate your circuit's performance, recording the metric when you actually corrupt / ablate all edges / nodes / neurons not in the circuit. (`results = evaluate_graph(model, graph, dataloader, metric)`)
+
+## FAQs
+- **How is the computation graph drawn?**: In this library, graphs are defined as being collections of nodes and edges, where nodes are either the inputs, attention heads, MLPs, or logits. Edges connect nodes across layers, accounting for the fact that nodes can engage in cross-layer communication via the residual stream. Each MLP (and the logits) has 1 input, but each attention head has 3: the Q, K, and V input.
+- **Which models are compatible with this library?**: In general, this library works with autoregressive transformer LMs in TransformerLens. It's important that models use pre-LayerNorm, as post-LayerNorm means that the residual stream is no longer a sum of all previous components. The models I have used so far are: GPT-2, Pythia, Mistral, Qwen, OLMo, Llama, and Gemma (using a workaround / hack since there is a post layer-norm that doesn't totally destroy the residual stream.)
+- **What about models with Grouped Query Attention (GQA)?**: To work with these models, please ungroup the GQA by setting `model.cfg.ungroup_grouped_query_attention = True`; this will remove all of the efficiency benefits of GQA, but allow the model to be used with this library.
+- **What about zero and mean ablations?**: I think these are often best avoided, at least zero-ablation. But these are supported as well (with EAP / EAP-IG (activations)). Just set the `intervention` argument of `attribute` and `evaluate_graph` to `zero`, `mean`, or `mean-positional`; in the latter case, all inputs must have the same length / structure. You can specify the dataloader to take the mean over via the `intervention_dataloader` argument.
+
+## More Info
+This library contains the following files:
 - `graph.py` contains the Node, Edge, and Graph classes.
 - `attribute.py` contains the implementation of EAP/-IG
+- `attribute_node.py` contains the implementation of EAP/-IG, but for nodes / neurons
 - `evaluate.py` contains code for evaluating circuits
 - `visualization.py` contains code for choosing colors / controlling how circuits are visualized
-- `utils.py` contains utils
-
-Note that the repo is now intended to work with `transformer-lens=2.0.0` and will also probably work with most recent-ish `1.X.Y` versions. Because of a bug with `attention.hook_result`, I can't yet upgrade to the newest version of TransformerLens (but would like to do this soon)!
-
-I recently updated this repo with a few improvements (v0.2.0); for the old version of this repo, please check out branch 0.1.0. The changes made are the following:
-- Added a bunch of variants on EAP-IG, including the following. Find a comparison of these methods in [my paper introducing EAP-IG](https://arxiv.org/abs/2403.17806); long story short, either `EAP-IG` or `clean-corrupted` is probably best:
-    - EAP, without any integrated gradients (`EAP`)
-    - EAP-IG, where you interpolate between the clean and corrupted inputs (`EAP-IG`; this is my method)
-    - EAP-IG, where you just average the gradients on the clean and corrupted example (`clean-corrupted`; this is a good baseline suggested by Neel Nanda)
-    - EAP-IG, where you set the output to each node to interpolate between its original output and entirely corrupted activations (`EAP-IG-partial-activations`). This is (by my understanding) equivalent to the [`mask_gradient_prune_scores` method from AutoCircuit](https://ufo-101.github.io/auto-circuit/reference/prune_algos/mask_gradient/#auto_circuit.prune_algos.mask_gradient.mask_gradient_prune_scores).
-    - EAP-IG, where you set the output of each node to interpolate between entirely clean and entirely corrupted activations(`EAP-IG-activations`); this is the EAP-IG introduced in [Marks et al.'s (2024) paper on feature circuits](https://arxiv.org/abs/2403.19647). Note that this version is slower, as it iterates over sublayers (attention blocks and MLPs). Ablating all the sublayers at once doesn't work, so I haven't made it available as an option (it's in the code though).
-- Changed how you specify which variant you want to use. Now, when you call `attribute`, just set the argument `method` to one of this above; to specify the number of steps, set `ig_steps` (default is 5). The default `method` is `EAP-IG`
-- Eliminated the fast but memory-hungry versions of EAP-IG originally contained in `attribute.py`; I didn't want to update two versions, and memory efficiency matters more. What was once `attribute_mem.py` is now `attribute.py`.
-- `eap.evaluate_graph` is now just `eap.evaluate`
-- Graph evaluation is now tensorized (and skips unnecessary nodes), making it much faster.
-- Changed how tokenizers are handled to be more compatible with newer versions of TransformerLens.
-- You can now export graphs as `.pt` files, which takes less space than `.json` files.
-- Added a `requirements.txt` file, as well as an `environment.yml` file. I used conda to handle my virtual environments, so the latter might work better.
-- Removed the dependency on `cmapy`, because cmapy isn't updated to work with newer versions of matplotlib; full disclosure, some of the `visualization.py` code thus comes directly from `cmapy`, just updated a little. This is also nice because it removes the need to download `cmapy`'s dependencies.
-- Added more comments (but more documentation is still needed!)
 
 This repo owes a lot to:
 - [The original ACDC repo](https://github.com/ArthurConmy/Automatic-Circuit-Discovery), in particular for its conceptualization of the graph and its visualization—go check it out!
