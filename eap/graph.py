@@ -727,16 +727,6 @@ class Graph:
             d['neurons_scores'] = self.neurons_scores
         torch.save(d, filename)
 
-    def to_pt(self, filename: str):
-        """Save the graph to a torch file
-        Args:
-            filename (str): the filename to save the graph to"""
-        src_nodes = {node.name: node.in_graph for node in self.nodes.values() if not isinstance(node, LogitNode)}
-        dst_nodes = self.get_dst_nodes()
-        edge_scores, edges_in_graph = self.edge_matrices()
-        d = {'cfg':self.cfg, 'src_nodes': src_nodes, 'dst_nodes': dst_nodes, 'edges': edge_scores, 'edges_in_graph': edges_in_graph}
-        torch.save(d, filename)
-
     @classmethod
     def from_json(cls, json_path: str) -> 'Graph':
         """
