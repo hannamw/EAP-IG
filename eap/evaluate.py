@@ -7,11 +7,11 @@ from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from .attribute import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
+from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
 from .graph import Graph, AttentionNode
 
 
-def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None) -> Union[torch.Tensor, List[torch.Tensor]]:
+def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
     """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
 
     Args:
@@ -189,13 +189,14 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                     activation_difference += means
 
             # For some metrics (e.g. accuracy or KL), we need the clean logits
-            # clean_logits = model(clean_tokens, attention_mask=attention_mask)
+            if not skip_clean:
+                clean_logits = model(clean_tokens, attention_mask=attention_mask)
                 
             with model.hooks(fwd_hooks_clean + input_construction_hooks):
                 logits = model(clean_tokens, attention_mask=attention_mask)
 
         for i, metric in enumerate(metrics):
-            r = metric(logits, None, input_lengths, label).cpu()
+            r = metric(logits, clean_logits, input_lengths, label).cpu()
             if len(r.size()) == 0:
                 r = r.unsqueeze(0)
             results[i].append(r)
