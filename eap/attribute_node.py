@@ -10,7 +10,8 @@ from tqdm import tqdm
 from einops import einsum
 
 from .graph import Graph
-from .attribute import tokenize_plus, compute_mean_activations
+from .utils import tokenize_plus, compute_mean_activations
+from .evaluate import evaluate_baseline, evaluate_graph
 
 
 def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:int , n_pos:int, scores: Optional[Tensor], neuron:bool=False):
@@ -92,6 +93,56 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
         bwd_hooks.append((node.in_hook, partial(gradient_hook, fwd_index, fwd_index)))
 
     return (fwd_hooks_corrupted, fwd_hooks_clean, bwd_hooks), activation_difference
+
+
+def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet=False):
+    """Gets scores via exact patching, by repeatedly calling evaluate graph.
+
+    Args:
+        model (HookedTransformer): the model to attribute
+        graph (Graph): the graph to attribute
+        dataloader (DataLoader): the data over which to attribute
+        metric (Callable[[Tensor], Tensor]): the metric to attribute with respect to
+        intervention (Literal[&#39;patching&#39;, &#39;zero&#39;, &#39;mean&#39;,&#39;mean, optional): the intervention to use. Defaults to 'patching'.
+        intervention_dataloader (Optional[DataLoader], optional): the dataloader over which to take the mean. Defaults to None.
+        quiet (bool, optional): _description_. Defaults to False.
+    """
+
+    # We should really pre-compute the mean activations or activation difference, but I haven't gotten around to doing so
+    # in a non-hacky way yet.
+    # means = None
+    # corrupted_activations = None
+    # if 'mean' in intervention:
+    #     assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
+    #     per_position = 'positional' in intervention
+    #     means = compute_mean_activations(model, graph, intervention_dataloader, per_position=per_position)
+    #     means = means.unsqueeze(0)
+    #     if not per_position:
+    #         means = means.unsqueeze(0)
+
+    # elif intervention == 'patching':
+    #     corrupted_activations = []
+    #     for _, corrupted, _ in dataloader:
+    #         corrupted_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, corrupted)
+    #         (fwd_hooks_corrupted, _, _), activation_difference = make_hooks_and_matrices(model, graph, len(corrupted), n_pos, None)
+    #         with torch.inference_mode(), model.hooks(fwd_hooks=fwd_hooks_corrupted):
+    #             _ = model(corrupted_tokens, attention_mask=attention_mask)
+    #         corrupted_activations.append(activation_difference)#.cpu())
+
+    graph.in_graph |= graph.real_edge_mask  # All edges that are real are now in the graph
+    graph.nodes_in_graph[:] = True
+    baseline = evaluate_baseline(model, dataloader, metric).mean().item()
+    nodes = graph.nodes.values() if quiet else tqdm(graph.nodes.values())
+    for node in nodes:
+        for edge in node.child_edges:
+            edge.in_graph = False
+        intervened_performance = evaluate_graph(model, graph, dataloader, metric, intervention=intervention, intervention_dataloader=intervention_dataloader, quiet=True, skip_clean=True).mean().item()
+        node.score = intervened_performance - baseline
+        for edge in node.child_edges:
+            edge.in_graph = True
+
+    # This is just to make the return type the same as all of the others; we've actually already updated the score matrix
+    return graph.nodes_scores
 
 
 def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, quiet:bool=False, neuron:bool=False):
@@ -347,7 +398,7 @@ def get_scores_clean_corrupted(model: HookedTransformer, graph: Graph, dataloade
     return scores
 
 allowed_aggregations = {'sum', 'mean'}#, 'l2'}        
-def attribute_node(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], method: Literal['EAP', 'EAP-IG-inputs', 'EAP-IG-activations'], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', aggregation='sum', ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet:bool=False, neuron:bool=False):
+def attribute_node(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], method: Literal['EAP', 'EAP-IG-inputs', 'EAP-IG-activations', 'exact'], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', aggregation='sum', ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet:bool=False, neuron:bool=False):
     assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
     assert model.cfg.use_split_qkv_input, "Model must be configured to use split qkv inputs (model.cfg.use_split_qkv_input)"
     assert model.cfg.use_hook_mlp_in, "Model must be configured to use hook MLP in (model.cfg.use_hook_mlp_in)"
@@ -367,6 +418,8 @@ def attribute_node(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         scores = get_scores_eap_ig(model, graph, dataloader, metric, steps=ig_steps, quiet=quiet, neuron=neuron)
     elif method == 'EAP-IG-activations':
         scores = get_scores_ig_activations(model, graph, dataloader, metric, steps=ig_steps, intervention=intervention, intervention_dataloader=intervention_dataloader, quiet=quiet, neuron=neuron)
+    elif method == 'exact':
+        scores = get_scores_exact(model, graph, dataloader, metric, intervention=intervention, intervention_dataloader=intervention_dataloader, quiet=quiet)
     else:
         raise ValueError(f"integrated_gradients must be in ['EAP', 'EAP-IG-inputs', 'EAP-IG-activations'], but got {method}")
 

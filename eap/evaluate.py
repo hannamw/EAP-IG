@@ -158,7 +158,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
             input_cons_hook = make_input_construction_hook(activation_differences, in_graph_matrix[:fwd_index, bwd_index], neuron_matrix)
             input_construction_hooks.append((node.in_hook, input_cons_hook))
 
-            return input_construction_hooks
+        return input_construction_hooks
     
     # convert metrics to list if it's not already
     if not isinstance(metrics, list):
@@ -189,8 +189,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                     activation_difference += means
 
             # For some metrics (e.g. accuracy or KL), we need the clean logits
-            if not skip_clean:
-                clean_logits = model(clean_tokens, attention_mask=attention_mask)
+            clean_logits = None if skip_clean else model(clean_tokens, attention_mask=attention_mask)
                 
             with model.hooks(fwd_hooks_clean + input_construction_hooks):
                 logits = model(clean_tokens, attention_mask=attention_mask)
