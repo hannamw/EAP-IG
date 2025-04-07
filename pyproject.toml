@@ -1,0 +1,18 @@
+[project]
+name = "eap"
+version = "2.0.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Michael Hanna", email = "mh2parker@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.10.1",
+    "pygraphviz>=1.14",
+    "transformer-lens>=2.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
