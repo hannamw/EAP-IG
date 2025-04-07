@@ -108,27 +108,6 @@ def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoad
         quiet (bool, optional): _description_. Defaults to False.
     """
 
-    # We should really pre-compute the mean activations or activation difference, but I haven't gotten around to doing so
-    # in a non-hacky way yet.
-    # means = None
-    # corrupted_activations = None
-    # if 'mean' in intervention:
-    #     assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
-    #     per_position = 'positional' in intervention
-    #     means = compute_mean_activations(model, graph, intervention_dataloader, per_position=per_position)
-    #     means = means.unsqueeze(0)
-    #     if not per_position:
-    #         means = means.unsqueeze(0)
-
-    # elif intervention == 'patching':
-    #     corrupted_activations = []
-    #     for _, corrupted, _ in dataloader:
-    #         corrupted_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, corrupted)
-    #         (fwd_hooks_corrupted, _, _), activation_difference = make_hooks_and_matrices(model, graph, len(corrupted), n_pos, None)
-    #         with torch.inference_mode(), model.hooks(fwd_hooks=fwd_hooks_corrupted):
-    #             _ = model(corrupted_tokens, attention_mask=attention_mask)
-    #         corrupted_activations.append(activation_difference)#.cpu())
-
     graph.in_graph |= graph.real_edge_mask  # All edges that are real are now in the graph
     graph.nodes_in_graph[:] = True
     baseline = evaluate_baseline(model, dataloader, metric).mean().item()
