@@ -9,9 +9,11 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "matplotlib>=3.10.1",
-    "pygraphviz>=1.14",
     "transformer-lens>=2.15.0",
 ]
+
+[project.optional-dependencies]
+viz = ["pygraphviz>=1.14"]
 
 [build-system]
 requires = ["hatchling"]
