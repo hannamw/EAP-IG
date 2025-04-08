@@ -705,7 +705,9 @@ class Graph:
         
         edge_dict = {}
         for edge_name, edge in self.edges.items():
-            edge_dict[edge_name] = {'score': edge.score, 'in_graph': bool(edge.in_graph)}
+            edge_dict[edge_name] = {'score': edge.score.item(), 'in_graph': bool(edge.in_graph)}
+
+        d['edges'] = edge_dict
         
         with open(filename, 'w') as f:
             json.dump(d, f)
@@ -746,6 +748,8 @@ class Graph:
         g = Graph.from_model(d['cfg'], neuron_level=True, node_scores=True)
         any_node_scores, any_neurons, any_neurons_scores = False, False, False
         for name, node_dict in d['nodes'].items():
+            if name == 'logits':
+                continue
             g.nodes[name].in_graph = node_dict['in_graph']
             if 'score' in node_dict:
                 any_node_scores = True
