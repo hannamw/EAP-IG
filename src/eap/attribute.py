@@ -447,7 +447,7 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
     # This means that scores are a [n_src_nodes, n_dst_nodes] tensor
     if method == 'EAP':
         scores = get_scores_eap(model, graph, dataloader, metric, intervention=intervention, 
-                                intervention_dataloader=intervention_dataloader, optimal_ablations=optimal_ablation_path, quiet=quiet)
+                                intervention_dataloader=intervention_dataloader, optimal_ablation_path=optimal_ablation_path, quiet=quiet)
     elif method == 'EAP-IG-inputs':
         if intervention != 'patching':
             raise ValueError(f"intervention must be 'patching' for EAP-IG-inputs, but got {intervention}")
@@ -463,7 +463,7 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
         scores = get_scores_information_flow_routes(model, graph, dataloader, quiet=quiet)
     elif method == 'exact':
         scores = get_scores_exact(model, graph, dataloader, metric, intervention=intervention, intervention_dataloader=intervention_dataloader, 
-                                  optimal_ablations=optimal_ablation_path, quiet=quiet)
+                                  optimal_ablation_path=optimal_ablation_path, quiet=quiet)
     else:
         raise ValueError(f"method must be in ['EAP', 'EAP-IG-inputs', 'clean-corrupted', 'EAP-IG-activations', 'information-flow-routes', 'exact'], but got {method}")
 
