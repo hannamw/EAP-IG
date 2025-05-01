@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Michael Hanna", email = "mh2parker@gmail.com" }
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.10.1",
     "transformer-lens>=2.15.0",
