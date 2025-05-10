@@ -5,7 +5,7 @@ This library has tools that will let you do a variety of things:
 - Construct a `Graph` object representing the computational graph of most autoregressive transformer LMs in the [TransformerLens library](https://github.com/TransformerLensOrg/TransformerLens). Computational graphs can be drawn at the following levels:
     - **Node and edge (default)**: Nodes are model components (attention heads and MLPs), and edges are connections between them (across layers, via the residual stream)
     - **Node**: The graph contains only nodes, and we disregard the edges. This is equivalent to saying that for every node in the circuit, all of its outgoing edges are also in the circuit.
-    - **Neuron**: The graph contains only nodes, split into neurons. That is, you can include individual neurons, or output dimensions of a given component. 
+    - **Neuron**: The graph contains only nodes, split into neurons. That is, you can include individual neurons, or output dimensions of a given component.
 - Use attribution-based circuit-finding methods to produce scores (indirect effect estimates) for each node or edge in the computational graph. The attribution methods supported are:
     - [Edge Attribution Patching (EAP)](https://arxiv.org/abs/1703.01365): Computes a first-order approximation of the indirect effect of each edge, i.e. the amount that your loss changes upon corrupting the edge. Essentially multiplies the change in component outputs by the gradient on clean inputs. Runs in O(1) time. See the [original blog post](https://www.neelnanda.io/mechanistic-interpretability/attribution-patching) for more info.
     - [Edge Attribution Patching with Integrated Gradients (EAP-IG, inputs)](https://arxiv.org/abs/2403.17806): An adaptation of EAP that improves circuit quality by averaging the gradient computation over *m* steps taken between the clean and corrupted inputs, as in the [integrated gradients paper](https://arxiv.org/abs/1703.01365). Takes O(*m*) time.
@@ -15,6 +15,17 @@ This library has tools that will let you do a variety of things:
 - Evaluate your circuit's performance (allowing you to compute its faithfulness)
 
 ## How to use this library
+
+**MacOS**
+```bash
+brew install graphviz
+export CFLAGS="-I$(brew --prefix graphviz)/include"
+export LDFLAGS="-L$(brew --prefix graphviz)/lib"
+pip install . # or `uv sync`
+```
+
+For other operating systems or if you encounter build errors, ensure the Graphviz C libraries are installed and accessible to the build system via environment variables (like `CFLAGS` and `LDFLAGS`).
+
 To use this library, just install it using `pip install .`. For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`. In general, the circuit-finding pipeline looks like this:
 - Define a task with clean and corrupted inputs, a label associated with the clean inputs, and a metric measuring model performance. (`dataloader = EAPDataset('greater-than').to_dataloader()`, `metric = ...`)
 - Define your model's computation graph at the desired level of granularity. (`graph = Graph.from_model(model)`)
