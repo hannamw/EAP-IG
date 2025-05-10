@@ -24,6 +24,12 @@ export LDFLAGS="-L$(brew --prefix graphviz)/lib"
 pip install . # or `uv sync`
 ```
 
+**Ubuntu**
+```bash
+apt-get update
+apt-get install -y graphviz libgraphviz-dev build-essential
+```
+
 For other operating systems or if you encounter build errors, ensure the Graphviz C libraries are installed and accessible to the build system via environment variables (like `CFLAGS` and `LDFLAGS`).
 
 To use this library, just install it using `pip install .`. For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`. In general, the circuit-finding pipeline looks like this:
