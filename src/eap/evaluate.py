@@ -13,10 +13,10 @@ from .graph import Graph, AttentionNode
 
 def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, 
                    metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], 
-                   quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional', 'optimal']='patching', 
-                   intervention_dataloader: Optional[DataLoader]=None, optimal_ablation_path: Optional[str]=None, 
-                   skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
-    """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
+                   quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                   intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
+    """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune 
+        beforehand to make sure your circuit is valid.
 
     Args:
         model (HookedTransformer): The model to run the circuit on 
@@ -24,11 +24,13 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         dataloader (DataLoader): The dataset to evaluate on
         metrics (Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]]): The metric(s) to evaluate with respect to
         quiet (bool, optional): Whether to silence the tqdm progress bar. Defaults to False.
-        intervention (Literal[&#39;patching&#39;, &#39;zero&#39;, &#39;mean&#39;,&#39;mean, optional): Which ablation to evaluate with respect to. 'patching' is an interchange intervention; mean-positional takes the positional mean over the given dataset. Defaults to 'patching'.
+        intervention (Literal[&#39;patching&#39;, &#39;zero&#39;, &#39;mean&#39;,&#39;mean, optional): Which ablation to evaluate with respect to. 
+            'patching' is an interchange intervention; mean-positional takes the positional mean over the given dataset. Defaults to 'patching'.
         intervention_dataloader (Optional[DataLoader], optional): The dataset to take the mean over. Must be set if intervention is mean or mean-positional. Defaults to None.
 
     Returns:
-        Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of faithfulness scores; if a list, each list entry corresponds to a metric in the input list
+        Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of faithfulness scores; if a list, each list entry 
+            corresponds to a metric in the input list
     """
     assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
     if model.cfg.n_key_value_heads is not None:
@@ -43,11 +45,6 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         means = means.unsqueeze(0)
         if not per_position:
             means = means.unsqueeze(0)
-
-    elif intervention == 'optimal':
-        assert optimal_ablation_path is not None, "Path to pre-computed activations must be provided for optimal ablations"
-        optimal_ablations = load_ablations(model, graph, optimal_ablation_path)
-        optimal_ablations = optimal_ablations.unsqueeze(0).unsqueeze(0)
 
     # This step cleans up the graph, removing components until it's fully connected
     graph.prune()
@@ -216,9 +213,6 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 # but in mean ablations, we need to add the mean in
                 if 'mean' in intervention:
                     activation_difference += means
-
-                if intervention == 'optimal':
-                    activation_difference += optimal_ablations
 
             # For some metrics (e.g. accuracy or KL), we need the clean logits
             clean_logits = None if skip_clean else model(clean_tokens, attention_mask=attention_mask)

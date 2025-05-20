@@ -206,33 +206,3 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
     means = means.squeeze(0)
     means /= total
     return means if per_position else means.mean(0)
-
-def load_ablations(model: HookedTransformer, graph: Graph, ablation_path: str):
-    """
-    Load pre-computed activations to be used for ablations.
-    Expects a pickle file containing a dictionary of the format {'block_name': Tensor[(1,) d_component_output]}
-    """
-    with open(ablation_path, "rb") as handle:
-        activations_precomp = pickle.load(handle)
-    
-    activations_optimal = torch.zeros((graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
-
-    processed_attn_layers = set()
-    for node in graph.nodes.values():
-        if isinstance(node, AttentionNode):
-            if node.layer in processed_attn_layers:
-                continue
-            processed_attn_layers.add(node.layer)
-        
-        if not isinstance(node, LogitNode):
-            if node.name == "input":
-                activations_optimal[0] = activations_precomp["hook_embed"]
-            elif node.name.startswith("a"):
-                head_idx = int(node.name.split("h")[-1])
-                acts_idx = (model.cfg.n_heads + 1) * node.layer + head_idx + 1
-                activations_optimal[acts_idx] = activations_precomp[f"blocks.{node.layer}.attn.hook_result"][head_idx]
-            elif node.name.startswith("m"):
-                acts_idx = (model.cfg.n_heads + 1) * node.layer + model.cfg.n_heads + 1
-                activations_optimal[acts_idx] = activations_precomp[f"blocks.{node.layer}.hook_mlp_out"].squeeze()
-    
-    return activations_optimal

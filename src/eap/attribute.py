@@ -13,8 +13,8 @@ from .evaluate import evaluate_graph, evaluate_baseline
 from .graph import Graph
 
 def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], 
-                     intervention: Literal['patching', 'zero', 'mean','mean-positional', 'optimal']='patching', 
-                     intervention_dataloader: Optional[DataLoader]=None, optimal_ablation_path: Optional[str] = None, quiet=False):
+                     intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                     intervention_dataloader: Optional[DataLoader]=None, quiet=False):
     """Gets scores via exact patching, by repeatedly calling evaluate graph.
 
     Args:
@@ -33,7 +33,7 @@ def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoad
     for edge in edges:
         edge.in_graph = False
         intervened_performance = evaluate_graph(model, graph, dataloader, metric, intervention=intervention, intervention_dataloader=intervention_dataloader, 
-                                                optimal_ablation_path=optimal_ablation_path, quiet=True, skip_clean=True).mean().item()
+                                                quiet=True, skip_clean=True).mean().item()
         edge.score = intervened_performance - baseline
         edge.in_graph = True
 
@@ -42,8 +42,8 @@ def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoad
 
 
 def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], 
-                   intervention: Literal['patching', 'zero', 'mean','mean-positional', 'optimal']='patching', 
-                   intervention_dataloader: Optional[DataLoader]=None, optimal_ablation_path: Optional[str] = None, quiet=False):
+                   intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                   intervention_dataloader: Optional[DataLoader]=None, quiet=False):
     """Gets edge attribution scores using EAP.
 
     Args:
@@ -66,10 +66,6 @@ def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader
         if not per_position:
             means = means.unsqueeze(0)
 
-    elif intervention == 'optimal':
-        assert optimal_ablation_path is not None, "Path to pre-computed activations must be provided for optimal ablations"
-        optimal_ablations = load_ablations(model, graph, optimal_ablation_path)
-        optimal_ablations = optimal_ablations.unsqueeze(0).unsqueeze(0)
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -90,9 +86,6 @@ def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader
                 # In the case of zero or mean ablation, we skip the adding in corrupted activations
                 # but in mean ablations, we need to add the mean in
                 activation_difference += means
-
-            elif intervention == 'optimal':
-                activation_difference += optimal_ablations
 
             # For some metrics (e.g. accuracy or KL), we need the clean logits
             clean_logits = model(clean_tokens, attention_mask=attention_mask)
@@ -190,8 +183,8 @@ def get_scores_eap_ig(model: HookedTransformer, graph: Graph, dataloader: DataLo
     return scores
 
 def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader: DataLoader, 
-                              metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional', 'optimal']='patching', 
-                              steps=30, intervention_dataloader: Optional[DataLoader]=None, optimal_ablation_path: Optional[str] = None, quiet=False):
+                              metric: Callable[[Tensor], Tensor], intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                              steps=30, intervention_dataloader: Optional[DataLoader]=None, quiet=False):
 
     if 'mean' in intervention:
         assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
@@ -200,11 +193,6 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
         means = means.unsqueeze(0)
         if not per_position:
             means = means.unsqueeze(0)
-
-    elif intervention == 'optimal':
-        assert optimal_ablation_path is not None, "Path to pre-computed activations must be provided for optimal ablations"
-        optimal_ablations = load_ablations(model, graph, optimal_ablation_path)
-        optimal_ablations = optimal_ablations.unsqueeze(0).unsqueeze(0)
 
     scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
     
@@ -228,8 +216,6 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
         elif 'mean' in intervention:
             activation_difference += means
 
-        elif intervention == 'optimal':
-            activation_difference += optimal_ablations
 
         with model.hooks(fwd_hooks=fwd_hooks_clean):
             clean_logits = model(clean_tokens, attention_mask=attention_mask)
@@ -431,9 +417,8 @@ def get_scores_information_flow_routes(model: HookedTransformer, graph: Graph, d
 allowed_aggregations = {'sum', 'mean'}    
 def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], 
               method: Literal['EAP', 'EAP-IG-inputs', 'clean-corrupted', 'EAP-IG-activations', 'information-flow-routes', 'exact'], 
-              intervention: Literal['patching', 'zero', 'mean','mean-positional', 'optimal']='patching', aggregation='sum', 
-              ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, 
-              optimal_ablation_path: Optional[str]=None, quiet=False):
+              intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', aggregation='sum', 
+              ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet=False):
     assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
     assert model.cfg.use_split_qkv_input, "Model must be configured to use split qkv inputs (model.cfg.use_split_qkv_input)"
     assert model.cfg.use_hook_mlp_in, "Model must be configured to use hook MLP in (model.cfg.use_hook_mlp_in)"
@@ -447,7 +432,7 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
     # This means that scores are a [n_src_nodes, n_dst_nodes] tensor
     if method == 'EAP':
         scores = get_scores_eap(model, graph, dataloader, metric, intervention=intervention, 
-                                intervention_dataloader=intervention_dataloader, optimal_ablation_path=optimal_ablation_path, quiet=quiet)
+                                intervention_dataloader=intervention_dataloader, quiet=quiet)
     elif method == 'EAP-IG-inputs':
         if intervention != 'patching':
             raise ValueError(f"intervention must be 'patching' for EAP-IG-inputs, but got {intervention}")
@@ -458,12 +443,12 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
         scores = get_scores_clean_corrupted(model, graph, dataloader, metric, quiet=quiet)
     elif method == 'EAP-IG-activations':
         scores = get_scores_ig_activations(model, graph, dataloader, metric, steps=ig_steps, intervention=intervention, 
-                                           intervention_dataloader=intervention_dataloader, optimal_ablation_path=optimal_ablation_path, quiet=quiet)
+                                           intervention_dataloader=intervention_dataloader, quiet=quiet)
     elif method == 'information-flow-routes':
         scores = get_scores_information_flow_routes(model, graph, dataloader, quiet=quiet)
     elif method == 'exact':
         scores = get_scores_exact(model, graph, dataloader, metric, intervention=intervention, intervention_dataloader=intervention_dataloader, 
-                                  optimal_ablation_path=optimal_ablation_path, quiet=quiet)
+                                  quiet=quiet)
     else:
         raise ValueError(f"method must be in ['EAP', 'EAP-IG-inputs', 'clean-corrupted', 'EAP-IG-activations', 'information-flow-routes', 'exact'], but got {method}")
 
