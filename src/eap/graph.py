@@ -6,7 +6,6 @@ from einops import einsum
 import torch
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 import numpy as np
-import pygraphviz as pgv
 
 from .visualization import get_color, generate_random_color
 
@@ -808,7 +807,7 @@ class Graph:
 
         return g
 
-    def to_graphviz(
+    def to_image(
         self,
         filename:str,
         colorscheme: str = "Pastel2",
@@ -816,13 +815,14 @@ class Graph:
         maximum_penwidth: float = 5.0,
         layout: str="dot",
         seed: Optional[int] = None
-    ) -> pgv.AGraph:
+    ):
 
         """Export the graph as a .png file
         
         Filename: the filename to save the graph to
         Colorscheme: a cmap colorscheme
         """
+        import pygraphviz as pgv
         g = pgv.AGraph(directed=True, bgcolor="white", overlap="false", splines="true", layout=layout)
 
         if seed is not None:
