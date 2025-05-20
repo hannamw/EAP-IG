@@ -6,12 +6,14 @@ readme = "README.md"
 authors = [
     { name = "Michael Hanna", email = "mh2parker@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "matplotlib>=3.10.1",
-    "pygraphviz>=1.14",
     "transformer-lens>=2.15.0",
 ]
+
+[project.optional-dependencies]
+viz = ["pygraphviz>=1.14"]
 
 [build-system]
 requires = ["hatchling"]

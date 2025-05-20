@@ -6,7 +6,6 @@ from einops import einsum
 import torch
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 import numpy as np
-import pygraphviz as pgv
 
 from .visualization import get_color, generate_random_color
 
@@ -705,7 +704,9 @@ class Graph:
         
         edge_dict = {}
         for edge_name, edge in self.edges.items():
-            edge_dict[edge_name] = {'score': edge.score, 'in_graph': bool(edge.in_graph)}
+            edge_dict[edge_name] = {'score': edge.score.item(), 'in_graph': bool(edge.in_graph)}
+
+        d['edges'] = edge_dict
         
         with open(filename, 'w') as f:
             json.dump(d, f)
@@ -746,6 +747,8 @@ class Graph:
         g = Graph.from_model(d['cfg'], neuron_level=True, node_scores=True)
         any_node_scores, any_neurons, any_neurons_scores = False, False, False
         for name, node_dict in d['nodes'].items():
+            if name == 'logits':
+                continue
             g.nodes[name].in_graph = node_dict['in_graph']
             if 'score' in node_dict:
                 any_node_scores = True
@@ -804,7 +807,7 @@ class Graph:
 
         return g
 
-    def to_graphviz(
+    def to_image(
         self,
         filename:str,
         colorscheme: str = "Pastel2",
@@ -812,13 +815,14 @@ class Graph:
         maximum_penwidth: float = 5.0,
         layout: str="dot",
         seed: Optional[int] = None
-    ) -> pgv.AGraph:
+    ):
 
         """Export the graph as a .png file
         
         Filename: the filename to save the graph to
         Colorscheme: a cmap colorscheme
         """
+        import pygraphviz as pgv
         g = pgv.AGraph(directed=True, bgcolor="white", overlap="false", splines="true", layout=layout)
 
         if seed is not None:

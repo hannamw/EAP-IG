@@ -7,12 +7,16 @@ from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from .attribute import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
+from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
 from .graph import Graph, AttentionNode
 
 
-def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
-    """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune beforehand to make sure your circuit is valid.
+def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, 
+                   metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], 
+                   quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
+                   intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
+    """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune 
+        beforehand to make sure your circuit is valid.
 
     Args:
         model (HookedTransformer): The model to run the circuit on 
@@ -20,11 +24,13 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         dataloader (DataLoader): The dataset to evaluate on
         metrics (Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]]): The metric(s) to evaluate with respect to
         quiet (bool, optional): Whether to silence the tqdm progress bar. Defaults to False.
-        intervention (Literal[&#39;patching&#39;, &#39;zero&#39;, &#39;mean&#39;,&#39;mean, optional): Which ablation to evaluate with respect to. 'patching' is an interchange intervention; mean-positional takes the positional mean over the given dataset. Defaults to 'patching'.
+        intervention (Literal[&#39;patching&#39;, &#39;zero&#39;, &#39;mean&#39;,&#39;mean, optional): Which ablation to evaluate with respect to. 
+            'patching' is an interchange intervention; mean-positional takes the positional mean over the given dataset. Defaults to 'patching'.
         intervention_dataloader (Optional[DataLoader], optional): The dataset to take the mean over. Must be set if intervention is mean or mean-positional. Defaults to None.
 
     Returns:
-        Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of faithfulness scores; if a list, each list entry corresponds to a metric in the input list
+        Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of faithfulness scores; if a list, each list entry 
+            corresponds to a metric in the input list
     """
     assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
     if model.cfg.n_key_value_heads is not None:
@@ -82,15 +88,31 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 activation_differences = activation_matrix[0] - activation_matrix[1]
                 
                 # get the clean outputs of the attention heads that came before
-                clean_attention_results = einsum(activation_matrix[1, :, :, :len(in_graph_vector)], attention_head_mask[:len(in_graph_vector)], 'batch pos previous hidden, previous layer -> batch pos layer hidden')
+                clean_attention_results = einsum(activation_matrix[1, :, :, :len(in_graph_vector)], 
+                                                 attention_head_mask[:len(in_graph_vector)], 
+                                                 'batch pos previous hidden, previous layer -> batch pos layer hidden')
                 
                 # get the update corresponding to non-attention heads, and the difference between clean and corrupted attention heads
                 if neuron_matrix is not None:
-                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], neuron_matrix[:len(in_graph_vector)], in_graph_vector, non_attention_head_mask[:len(in_graph_vector)], 'batch pos previous hidden, previous hidden, previous ..., previous -> batch pos ... hidden')
-                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], neuron_matrix[:len(in_graph_vector)], in_graph_vector, attention_head_mask[:len(in_graph_vector)], 'batch pos previous hidden, previous hidden, previous ..., previous layer -> batch pos ... layer hidden')                    
+                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], 
+                                                  neuron_matrix[:len(in_graph_vector)], 
+                                                  in_graph_vector, 
+                                                  non_attention_head_mask[:len(in_graph_vector)], 
+                                                  'batch pos previous hidden, previous hidden, previous ..., previous -> batch pos ... hidden')
+                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], 
+                                                            neuron_matrix[:len(in_graph_vector)], 
+                                                            in_graph_vector, 
+                                                            attention_head_mask[:len(in_graph_vector)], 
+                                                            'batch pos previous hidden, previous hidden, previous ..., previous layer -> batch pos ... layer hidden')                    
                 else:
-                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector, non_attention_head_mask[:len(in_graph_vector)], 'batch pos previous hidden, previous ..., previous -> batch pos ... hidden')
-                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector, attention_head_mask[:len(in_graph_vector)], 'batch pos previous hidden, previous ..., previous layer -> batch pos ... layer hidden')
+                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], 
+                                                  in_graph_vector, 
+                                                  non_attention_head_mask[:len(in_graph_vector)], 
+                                                  'batch pos previous hidden, previous ..., previous -> batch pos ... hidden')
+                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], 
+                                                            in_graph_vector, 
+                                                            attention_head_mask[:len(in_graph_vector)], 
+                                                            'batch pos previous hidden, previous ..., previous layer -> batch pos ... layer hidden')
                 
                 # add the biases to the attention results, and compute the corrupted attention results using the difference
                 # we process all the attention heads at once; this is how we can tell if we're doing that
@@ -123,9 +145,11 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 activation_differences = activation_matrix
                 # The ... here is to account for a potential head dimension, when constructing a whole attention layer's input
                 if neuron_matrix is not None:
-                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], neuron_matrix[:len(in_graph_vector)], in_graph_vector,'batch pos previous hidden, previous hidden, previous ... -> batch pos ... hidden')
+                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], neuron_matrix[:len(in_graph_vector)], in_graph_vector,
+                                    'batch pos previous hidden, previous hidden, previous ... -> batch pos ... hidden')
                 else:
-                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,'batch pos previous hidden, previous ... -> batch pos ... hidden')
+                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,
+                                    'batch pos previous hidden, previous ... -> batch pos ... hidden')
             activations += update
             return activations
         return input_construction_hook
@@ -134,7 +158,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         input_construction_hooks = []
         for layer in range(model.cfg.n_layers):
             # If any attention node in the layer is in the graph, just construct the input for the entire layer
-            if any(graph.nodes[f'a{layer}.h{head}'].in_graph for head in range(model.cfg.n_heads)) and not (neuron_matrix is None and all(parent_edge.in_graph for head in range(model.cfg.n_heads) for parent_edge in graph.nodes[f'a{layer}.h{head}'].parent_edges)):
+            if any(graph.nodes[f'a{layer}.h{head}'].in_graph for head in range(model.cfg.n_heads)) and \
+                not (neuron_matrix is None and all(parent_edge.in_graph for head in range(model.cfg.n_heads) for parent_edge in graph.nodes[f'a{layer}.h{head}'].parent_edges)):
                 for i, letter in enumerate('qkv'):
                     node = graph.nodes[f'a{layer}.h0']
                     prev_index = graph.prev_index(node)
@@ -143,7 +168,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                     input_construction_hooks.append((node.qkv_inputs[i], input_cons_hook))
                     
             # add MLP hook if MLP in graph
-            if graph.nodes[f'm{layer}'].in_graph and not (neuron_matrix is None and all(parent_edge.in_graph for parent_edge in graph.nodes[f'm{layer}'].parent_edges)):
+            if graph.nodes[f'm{layer}'].in_graph and \
+                not (neuron_matrix is None and all(parent_edge.in_graph for parent_edge in graph.nodes[f'm{layer}'].parent_edges)):
                 node = graph.nodes[f'm{layer}']
                 prev_index = graph.prev_index(node)
                 bwd_index = graph.backward_index(node)
@@ -207,7 +233,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     return results
 
 
-def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]], run_corrupted=False, quiet=False) -> Union[torch.Tensor, List[torch.Tensor]]:
+def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]], 
+                      run_corrupted=False, quiet=False) -> Union[torch.Tensor, List[torch.Tensor]]:
     """Evaluates the model on the given dataloader, without any intervention. This is useful for computing the baseline performance of the model.
 
     Args:
