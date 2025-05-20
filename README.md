@@ -14,7 +14,11 @@ This library has tools that will let you do a variety of things:
 - Use either a greedy-search or top-n approach to find a circuit of a given size based on these scores
 - Evaluate your circuit's performance (allowing you to compute its faithfulness)
 
-## How to use this library
+## How to install this library
+To use this library, just install it using `pip install .`. If you'd like to be able to visualize the graphs you create, please use the `viz` option: `pip install .[viz]`. This may require you to install graphviz:
+
+<details>
+<summary>How to install graphviz</summary>
 
 **MacOS**
 ```bash
@@ -31,8 +35,10 @@ apt-get install -y graphviz libgraphviz-dev build-essential
 ```
 
 For other operating systems or if you encounter build errors, ensure the Graphviz C libraries are installed and accessible to the build system via environment variables (like `CFLAGS` and `LDFLAGS`).
+</details>
 
-To use this library, just install it using `pip install .`. For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`. In general, the circuit-finding pipeline looks like this:
+## How to use this library
+For a demo of this library's features, check out `greater_than.ipynb`; for a demo using larger models (Llama-3 8B), check out `ioi.ipynb`. In general, the circuit-finding pipeline looks like this:
 - Define a task with clean and corrupted inputs, a label associated with the clean inputs, and a metric measuring model performance. (`dataloader = EAPDataset('greater-than').to_dataloader()`, `metric = ...`)
 - Define your model's computation graph at the desired level of granularity. (`graph = Graph.from_model(model)`)
 - Use an attribution method to estimate the change in the metric that would occur if you were to corrupted / mean-ablate / zero-ablate each unit in your computation graph (i.e., estimate each unit's indirect effect). (`attribute(model, graph, dataloader, metric, method='EAP-IG-inputs', ig_steps=5)`)
