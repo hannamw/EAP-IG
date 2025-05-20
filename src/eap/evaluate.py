@@ -7,7 +7,7 @@ from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations, load_ablations
+from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
 from .graph import Graph, AttentionNode
 
 

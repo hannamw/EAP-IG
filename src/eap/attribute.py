@@ -1,4 +1,4 @@
-from typing import Callable, List, Union, Optional, Literal, Tuple
+from typing import Callable, List, Optional, Literal, Tuple
 from functools import partial
 
 import torch
@@ -8,7 +8,7 @@ from transformer_lens import HookedTransformer
 
 from tqdm import tqdm
 
-from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations, load_ablations
+from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
 from .evaluate import evaluate_graph, evaluate_baseline
 from .graph import Graph
 
