@@ -580,7 +580,6 @@ class Graph:
             nodes_with_ingoing = einsum(self.in_graph.any(dim=0).float(), self.forward_to_backward.float(), 'backward, forward backward -> forward') > 0
             nodes_with_ingoing[0] = True  # input node always treated as if it has incoming edges
             new_nodes_in_graph = nodes_with_outgoing & nodes_with_ingoing
-            old_new_same = torch.all(new_nodes_in_graph == self.nodes_in_graph)
             self.nodes_in_graph[:] = new_nodes_in_graph
             
             # remove edges with missing parents or children
@@ -588,7 +587,9 @@ class Graph:
             backward_in_graph = (self.nodes_in_graph.float() @ self.forward_to_backward.float())
             backward_in_graph[-1] = 1  # logits node is always present
             edge_remask = einsum(forward_in_graph, backward_in_graph, 'forward, backward -> forward backward') > 0
+            old_edges_in_graph = self.in_graph.clone()
             self.in_graph *= edge_remask
+            old_new_same = torch.all(new_nodes_in_graph == self.nodes_in_graph) and torch.all(old_edges_in_graph == self.in_graph)
             
         # remove neurons from nodes not in the graph
         if self.neurons_in_graph is not None:
