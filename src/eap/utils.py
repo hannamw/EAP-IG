@@ -13,6 +13,29 @@ from einops import einsum
 from .graph import Graph, AttentionNode, LogitNode
 
 
+def get_accum_device(model: HookedTransformer, graph: Optional[Graph] = None, scores: Optional[Tensor] = None) -> torch.device:
+    """Pick a stable device for attribution accumulation.
+
+    Priority: use CUDA scores if present; otherwise fall back to the model's
+    first parameter device. This avoids accidentally forcing CPU when the model
+    is on GPU but the graph wasn't moved yet.
+    """
+    model_device = None
+    for param in model.parameters():
+        model_device = param.device
+        break
+
+    if scores is not None:
+        if scores.is_cuda or model_device is None or model_device.type == "cpu":
+            return scores.device
+    if graph is not None and hasattr(graph, "scores") and isinstance(graph.scores, torch.Tensor):
+        if graph.scores.is_cuda or model_device is None or model_device.type == "cpu":
+            return graph.scores.device
+    if model_device is not None:
+        return model_device
+    return torch.device("cpu")
+
+
 def tokenize_plus(model: HookedTransformer, inputs: List[str], max_length: Optional[int] = None):
     """
     Tokenizes the input strings using the provided model.
@@ -28,6 +51,11 @@ def tokenize_plus(model: HookedTransformer, inputs: List[str], max_length: Optio
             - input_lengths (torch.Tensor): The lengths of the tokenized inputs.
             - n_pos (int): The maximum sequence length of the tokenized inputs.
     """
+    if isinstance(inputs, torch.Tensor):
+        batch, seq_len = inputs.shape[:2]
+        input_lengths = torch.full((batch,), seq_len, dtype=torch.long, device=inputs.device)
+        return inputs, None, input_lengths, seq_len
+
     if max_length is not None:
         old_n_ctx = model.cfg.n_ctx
         model.cfg.n_ctx = max_length
@@ -53,10 +81,11 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
         Tuple[Tuple[List, List, List], Tensor]: The final tensor ([batch, pos, n_src_nodes, d_model]) stores activation differences, i.e. corrupted - clean activations. The first set of hooks will add in the activations they are run on (run these on corrupted input), while the second set will subtract out the activations they are run on (run these on clean input). The third set of hooks will compute the gradients and update the scores matrix that you passed in. 
     """
     separate_activations = model.cfg.use_normalization_before_and_after and scores is None
+    accum_device = get_accum_device(model, graph=graph, scores=scores)
     if separate_activations:
-        activation_difference = torch.zeros((2, batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
+        activation_difference = torch.zeros((2, batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=accum_device, dtype=model.cfg.dtype)
     else:
-        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
+        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=accum_device, dtype=model.cfg.dtype)
 
 
     fwd_hooks_clean = []
@@ -69,6 +98,8 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
     # but necessary for models with Gemma's architecture.
     def activation_hook(index, activations, hook, add:bool=True):
         acts = activations.detach()
+        if acts.device != activation_difference.device:
+            acts = acts.to(activation_difference.device)
         try:
             if separate_activations:
                 if add:
@@ -96,6 +127,8 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
 
         """
         grads = gradients.detach()
+        if grads.device != activation_difference.device:
+            grads = grads.to(activation_difference.device)
         try:
             if grads.ndim == 3:
                 grads = grads.unsqueeze(2)
@@ -182,18 +215,22 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
 
     means_initialized = False
     total = 0
+    accum_device = get_accum_device(model, graph=graph)
     for batch in tqdm(dataloader, desc='Computing mean'):
         # maybe the dataset is given as a tuple, maybe its just raw strings
         batch_inputs = batch[0] if isinstance(batch, tuple) else batch
         tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, batch_inputs, max_length=512)
+        tokens = tokens.to(accum_device)
+        attention_mask = attention_mask.to(accum_device)
+        input_lengths = input_lengths.to(accum_device)
         total += len(batch_inputs)
 
         if not means_initialized:
             # here is where we store the means
             if per_position:
-                means = torch.zeros((n_pos, graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
+                means = torch.zeros((n_pos, graph.n_forward, model.cfg.d_model), device=accum_device, dtype=model.cfg.dtype)
             else:
-                means = torch.zeros((graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
+                means = torch.zeros((graph.n_forward, model.cfg.d_model), device=accum_device, dtype=model.cfg.dtype)
             means_initialized = True
 
         if per_position:

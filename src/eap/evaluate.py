@@ -7,7 +7,7 @@ from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
+from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations, get_accum_device
 from .graph import Graph, AttentionNode
 
 
@@ -38,6 +38,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         
     assert intervention in ['patching', 'zero', 'mean', 'mean-positional'], f"Invalid intervention: {intervention}"
     
+    accum_device = get_accum_device(model, graph=graph)
+
     if 'mean' in intervention:
         assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
         per_position = 'positional' in intervention
@@ -50,11 +52,11 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     graph.prune()
 
     # Construct a matrix that indicates which edges are in the graph
-    in_graph_matrix = graph.in_graph.to(device=model.cfg.device, dtype=model.cfg.dtype)
+    in_graph_matrix = graph.in_graph.to(device=accum_device, dtype=model.cfg.dtype)
     
     # same thing but for neurons
     if graph.neurons_in_graph is not None:
-        neuron_matrix = graph.neurons_in_graph.to(device=model.cfg.device, dtype=model.cfg.dtype)
+        neuron_matrix = graph.neurons_in_graph.to(device=accum_device, dtype=model.cfg.dtype)
 
         # If an edge is in the graph, but not all its neurons are, we need to update that edge anyway
         node_fully_in_graph = (neuron_matrix.sum(-1) == model.cfg.d_model).to(model.cfg.dtype)
@@ -70,53 +72,67 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         
     if model.cfg.use_normalization_before_and_after:
         # If the model also normalizes the outputs of attention heads, we'll need to take that into account when evaluating the graph.
-        attention_head_mask = torch.zeros((graph.n_forward, model.cfg.n_layers), device='cuda', dtype=model.cfg.dtype)
+        attention_head_mask = torch.zeros((graph.n_forward, model.cfg.n_layers), device=accum_device, dtype=model.cfg.dtype)
         for node in graph.nodes.values():
             if isinstance(node, AttentionNode):
                 attention_head_mask[graph.forward_index(node), node.layer] = 1
 
         non_attention_head_mask = 1 - attention_head_mask.any(-1).to(dtype=model.cfg.dtype)
-        attention_biases = torch.stack([block.attn.b_O for block in model.blocks])
+        attention_biases = torch.stack([block.attn.b_O.to(accum_device) for block in model.blocks])
 
 
     # For each node in the graph, corrupt its inputs, if the corresponding edge isn't in the graph 
     # We corrupt it by adding in the activation difference (b/w clean and corrupted acts)
     def make_input_construction_hook(activation_matrix, in_graph_vector, neuron_matrix):
         def input_construction_hook(activations, hook):
+            device = activations.device
+            if isinstance(activation_matrix, torch.Tensor) and activation_matrix.device != device:
+                activation_matrix_local = activation_matrix.to(device)
+            else:
+                activation_matrix_local = activation_matrix
+            if isinstance(in_graph_vector, torch.Tensor) and in_graph_vector.device != device:
+                in_graph_vector_local = in_graph_vector.to(device)
+            else:
+                in_graph_vector_local = in_graph_vector
+            if neuron_matrix is not None and isinstance(neuron_matrix, torch.Tensor) and neuron_matrix.device != device:
+                neuron_matrix_local = neuron_matrix.to(device)
+            else:
+                neuron_matrix_local = neuron_matrix
+
             # Case where layernorm is applied after attention (gemma only)
             if model.cfg.use_normalization_before_and_after:
-                activation_differences = activation_matrix[0] - activation_matrix[1]
+                activation_differences = activation_matrix_local[0] - activation_matrix_local[1]
                 
                 # get the clean outputs of the attention heads that came before
-                clean_attention_results = einsum(activation_matrix[1, :, :, :len(in_graph_vector)], 
-                                                 attention_head_mask[:len(in_graph_vector)], 
+                clean_attention_results = einsum(activation_matrix_local[1, :, :, :len(in_graph_vector_local)], 
+                                                 attention_head_mask[:len(in_graph_vector_local)], 
                                                  'batch pos previous hidden, previous layer -> batch pos layer hidden')
                 
                 # get the update corresponding to non-attention heads, and the difference between clean and corrupted attention heads
-                if neuron_matrix is not None:
-                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], 
-                                                  neuron_matrix[:len(in_graph_vector)], 
-                                                  in_graph_vector, 
-                                                  non_attention_head_mask[:len(in_graph_vector)], 
+                if neuron_matrix_local is not None:
+                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector_local)], 
+                                                  neuron_matrix_local[:len(in_graph_vector_local)], 
+                                                  in_graph_vector_local, 
+                                                  non_attention_head_mask[:len(in_graph_vector_local)], 
                                                   'batch pos previous hidden, previous hidden, previous ..., previous -> batch pos ... hidden')
-                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], 
-                                                            neuron_matrix[:len(in_graph_vector)], 
-                                                            in_graph_vector, 
-                                                            attention_head_mask[:len(in_graph_vector)], 
+                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector_local)], 
+                                                            neuron_matrix_local[:len(in_graph_vector_local)], 
+                                                            in_graph_vector_local, 
+                                                            attention_head_mask[:len(in_graph_vector_local)], 
                                                             'batch pos previous hidden, previous hidden, previous ..., previous layer -> batch pos ... layer hidden')                    
                 else:
-                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector)], 
-                                                  in_graph_vector, 
-                                                  non_attention_head_mask[:len(in_graph_vector)], 
+                    non_attention_update = einsum(activation_differences[:, :, :len(in_graph_vector_local)], 
+                                                  in_graph_vector_local, 
+                                                  non_attention_head_mask[:len(in_graph_vector_local)], 
                                                   'batch pos previous hidden, previous ..., previous -> batch pos ... hidden')
-                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector)], 
-                                                            in_graph_vector, 
-                                                            attention_head_mask[:len(in_graph_vector)], 
+                    corrupted_attention_difference = einsum(activation_differences[:, :, :len(in_graph_vector_local)], 
+                                                            in_graph_vector_local, 
+                                                            attention_head_mask[:len(in_graph_vector_local)], 
                                                             'batch pos previous hidden, previous ..., previous layer -> batch pos ... layer hidden')
                 
                 # add the biases to the attention results, and compute the corrupted attention results using the difference
                 # we process all the attention heads at once; this is how we can tell if we're doing that
-                if in_graph_vector.ndim == 2:
+                if in_graph_vector_local.ndim == 2:
                     corrupted_attention_results = clean_attention_results.unsqueeze(2) + corrupted_attention_difference
                     # (1, 1, 1, layer, hidden)
                     clean_attention_results += attention_biases.unsqueeze(0).unsqueeze(0)
@@ -129,11 +145,11 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 # pass both the clean and corrupted attention results through the layernorm and 
                 # add the difference to the update
                 update = non_attention_update
-                valid_layers = attention_head_mask[:len(in_graph_vector)].any(0)
+                valid_layers = attention_head_mask[:len(in_graph_vector_local)].any(0)
                 for i, valid_layer in enumerate(valid_layers):
                     if not valid_layer:
                         break
-                    if in_graph_vector.ndim == 2:
+                    if in_graph_vector_local.ndim == 2:
                         update -= model.blocks[i].ln1_post(clean_attention_results[:, :, None, i])
                         update += model.blocks[i].ln1_post(corrupted_attention_results[:, :, :, i])                        
                     else:
@@ -142,14 +158,16 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                         
             else:
                 # In the non-gemma case, things are easy!
-                activation_differences = activation_matrix
+                activation_differences = activation_matrix_local
                 # The ... here is to account for a potential head dimension, when constructing a whole attention layer's input
-                if neuron_matrix is not None:
-                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], neuron_matrix[:len(in_graph_vector)], in_graph_vector,
+                if neuron_matrix_local is not None:
+                    update = einsum(activation_differences[:, :, :len(in_graph_vector_local)], neuron_matrix_local[:len(in_graph_vector_local)], in_graph_vector_local,
                                     'batch pos previous hidden, previous hidden, previous ... -> batch pos ... hidden')
                 else:
-                    update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,
+                    update = einsum(activation_differences[:, :, :len(in_graph_vector_local)], in_graph_vector_local,
                                     'batch pos previous hidden, previous ... -> batch pos ... hidden')
+            if isinstance(update, torch.Tensor) and update.device != device:
+                update = update.to(device)
             activations += update
             return activations
         return input_construction_hook
@@ -196,6 +214,11 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     for clean, corrupted, label in dataloader:
         clean_tokens, attention_mask, input_lengths, n_pos = tokenize_plus(model, clean)
         corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
+        clean_tokens = clean_tokens.to(accum_device)
+        corrupted_tokens = corrupted_tokens.to(accum_device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(accum_device)
+        input_lengths = input_lengths.to(accum_device)
         
         # fwd_hooks_corrupted adds in corrupted acts to activation_difference
         # fwd_hooks_clean subtracts out clean acts from activation_difference
@@ -252,9 +275,15 @@ def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: 
     results = [[] for _ in metrics]
     if not quiet:
         dataloader = tqdm(dataloader)
+    accum_device = get_accum_device(model)
     for clean, corrupted, label in dataloader:
         clean_tokens, attention_mask, input_lengths, _ = tokenize_plus(model, clean)
         corrupted_tokens, _, _, _ = tokenize_plus(model, corrupted)
+        clean_tokens = clean_tokens.to(accum_device)
+        corrupted_tokens = corrupted_tokens.to(accum_device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(accum_device)
+        input_lengths = input_lengths.to(accum_device)
         with torch.inference_mode():
             corrupted_logits = model(corrupted_tokens, attention_mask=attention_mask)
             logits = model(clean_tokens, attention_mask=attention_mask)

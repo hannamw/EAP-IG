@@ -220,6 +220,27 @@ class Graph:
         self.n_forward = 0
         self.n_backward = 0
 
+    def to(self, device: Union[str, torch.device]) -> 'Graph':
+        """Move graph tensors to the specified device."""
+        device = torch.device(device)
+
+        def _move(t):
+            return t.to(device) if isinstance(t, torch.Tensor) else t
+
+        self.forward_to_backward = _move(self.forward_to_backward)
+        self.scores = _move(self.scores)
+        self.real_edge_mask = _move(self.real_edge_mask)
+        self.in_graph = _move(self.in_graph)
+        self.nodes_in_graph = _move(self.nodes_in_graph)
+        if self.nodes_scores is not None:
+            self.nodes_scores = _move(self.nodes_scores)
+        if self.neurons_in_graph is not None:
+            self.neurons_in_graph = _move(self.neurons_in_graph)
+        if self.neurons_scores is not None:
+            self.neurons_scores = _move(self.neurons_scores)
+
+        return self
+
     def add_edge(self, parent:Node, child:Node, qkv:Optional[Literal["q", "k", "v"]]=None):
         edge = Edge(self, parent, child, qkv)
         self.real_edge_mask[edge.matrix_index] = True
@@ -600,7 +621,13 @@ class Graph:
             
 
     @classmethod
-    def from_model(cls, model_or_config: Union[HookedTransformer,HookedTransformerConfig, Dict], neuron_level: bool = False, node_scores: bool = False) -> 'Graph':
+    def from_model(
+        cls,
+        model_or_config: Union[HookedTransformer, HookedTransformerConfig, Dict],
+        neuron_level: bool = False,
+        node_scores: bool = False,
+        device: Optional[Union[str, torch.device]] = None,
+    ) -> 'Graph':
         """Instantiate a Graph object from a HookedTransformer or HookedTransformerConfig object, or a similar Dict. The neuron_level parameter determines whether the graph should be neuron-level or not, while the node_scores parameter determines whether the graph should have node scores or not. If you don't have scores for all nodes / neurons, just don't set them (default is torch.nan). Any node/neuron without a real score will always be kept in the graph when doing node/neuron-level topn (but might be eliminated by another level's topn, e.g. a node with no neuron scores might be removed if it loses all edges)
 
         Args:
@@ -627,22 +654,26 @@ class Graph:
         else:
             raise ValueError(f"Invalid input type: {type(model_or_config)}")
             
+        if device is None:
+            device = "cpu"
+        device = torch.device(device)
+
         graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
         graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1
-        graph.forward_to_backward = torch.zeros((graph.n_forward, graph.n_backward)).bool()
+        graph.forward_to_backward = torch.zeros((graph.n_forward, graph.n_backward), device=device).bool()
         
-        graph.scores = torch.zeros((graph.n_forward, graph.n_backward))
-        graph.real_edge_mask = torch.zeros((graph.n_forward, graph.n_backward)).bool()
-        graph.in_graph = torch.zeros((graph.n_forward, graph.n_backward)).bool()
-        graph.nodes_in_graph = torch.zeros(graph.n_forward).bool()
+        graph.scores = torch.zeros((graph.n_forward, graph.n_backward), device=device)
+        graph.real_edge_mask = torch.zeros((graph.n_forward, graph.n_backward), device=device).bool()
+        graph.in_graph = torch.zeros((graph.n_forward, graph.n_backward), device=device).bool()
+        graph.nodes_in_graph = torch.zeros(graph.n_forward, device=device).bool()
         if node_scores:
-            graph.nodes_scores = torch.zeros(graph.n_forward) 
+            graph.nodes_scores = torch.zeros(graph.n_forward, device=device) 
             graph.nodes_scores[:] = torch.nan
         else:
             graph.nodes_scores = None
         if neuron_level:
-            graph.neurons_in_graph = torch.zeros((graph.n_forward, graph.cfg['d_model'])).bool()
-            graph.neurons_scores = torch.zeros((graph.n_forward, graph.cfg['d_model']))
+            graph.neurons_in_graph = torch.zeros((graph.n_forward, graph.cfg['d_model']), device=device).bool()
+            graph.neurons_scores = torch.zeros((graph.n_forward, graph.cfg['d_model']), device=device)
             graph.neurons_scores[:] = torch.nan
         else:
             graph.neurons_in_graph = None
