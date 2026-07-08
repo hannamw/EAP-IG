@@ -1,16 +1,28 @@
-from typing import Callable, List, Optional, Literal, Tuple
+from typing import Any, Callable, List, Optional, Literal, Tuple
 from functools import partial
 
 import torch
 from torch.utils.data import DataLoader
 from torch import Tensor
-from transformer_lens import HookedTransformer
 
 from tqdm import tqdm
 
-from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
+from .utils import (
+    _maybe_expand_grouped_query_tensor,
+    compute_mean_activations,
+    make_hooks_and_matrices,
+    tokenize_plus,
+)
 from .evaluate import evaluate_graph, evaluate_baseline
 from .graph import Graph
+from .model_adapter import (
+    get_model_device,
+    get_score_accumulation_dtype,
+    prepare_model_for_eap,
+    validate_model_for_eap,
+)
+
+HookedTransformer = Any
 
 def get_scores_exact(model: HookedTransformer, graph: Graph, dataloader:DataLoader, metric: Callable[[Tensor], Tensor], 
                      intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
@@ -56,7 +68,7 @@ def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader
     Returns:
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
 
     if 'mean' in intervention:
         assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
@@ -113,7 +125,7 @@ def get_scores_eap_ig(model: HookedTransformer, graph: Graph, dataloader: DataLo
     Returns:
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -194,7 +206,7 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
         if not per_position:
             means = means.unsqueeze(0)
 
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -270,7 +282,7 @@ def get_scores_clean_corrupted(model: HookedTransformer, graph: Graph, dataloade
         _type_: _description_
     """
 
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -321,10 +333,10 @@ def get_scores_information_flow_routes(model: HookedTransformer, graph: Graph, d
         Tensor: scores based on information flow routes
     """
     # I could do some hacky overriding of make_hooks_and_matrices here but I will not
-    scores = torch.zeros((graph.n_forward, graph.n_backward), device='cuda', dtype=model.cfg.dtype)    
+    scores = torch.zeros((graph.n_forward, graph.n_backward), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
 
     def make_hooks(n_pos: int, input_lengths: torch.Tensor) -> List[Tuple[str, Callable]]:
-        output_activations = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
+        output_activations = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=get_score_accumulation_dtype(model))
 
         def output_hook(index, activations, hook):
             try:
@@ -336,7 +348,7 @@ def get_scores_information_flow_routes(model: HookedTransformer, graph: Graph, d
 
         # compute the score directly, without saving the input activations
         def input_hook(prev_index, bwd_index, input_lengths, activations, hook):
-            acts = activations.detach()
+            acts = _maybe_expand_grouped_query_tensor(model, activations.detach())
             try:
                 if acts.ndim == 3:
                     acts = acts.unsqueeze(2)
@@ -418,12 +430,14 @@ allowed_aggregations = {'sum', 'mean'}
 def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, metric: Callable[[Tensor], Tensor], 
               method: Literal['EAP', 'EAP-IG-inputs', 'clean-corrupted', 'EAP-IG-activations', 'information-flow-routes', 'exact'], 
               intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', aggregation='sum', 
-              ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet=False):
-    assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
-    assert model.cfg.use_split_qkv_input, "Model must be configured to use split qkv inputs (model.cfg.use_split_qkv_input)"
-    assert model.cfg.use_hook_mlp_in, "Model must be configured to use hook MLP in (model.cfg.use_hook_mlp_in)"
-    if model.cfg.n_key_value_heads is not None:
-        assert model.cfg.ungroup_grouped_query_attention, "Model must be configured to ungroup grouped attention (model.cfg.ungroup_grouped_attention)"
+              ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, quiet=False,
+              auto_enable_bridge_compat: bool=True, bridge_compat_kwargs: Optional[dict]=None):
+    model = prepare_model_for_eap(
+        model,
+        auto_enable_bridge_compat=auto_enable_bridge_compat,
+        compatibility_mode_kwargs=bridge_compat_kwargs,
+    )
+    validate_model_for_eap(model)
     
     if aggregation not in allowed_aggregations:
         raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')
@@ -457,4 +471,3 @@ def attribute(model: HookedTransformer, graph: Graph, dataloader: DataLoader, me
         scores /= model.cfg.d_model
         
     graph.scores[:] =  scores.to(graph.scores.device)
-

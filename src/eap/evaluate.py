@@ -1,20 +1,29 @@
-from typing import Callable, List, Union, Literal, Optional
+from typing import Any, Callable, List, Union, Literal, Optional
 
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
-from transformer_lens import HookedTransformer
 from tqdm import tqdm
 from einops import einsum
 
-from .utils import tokenize_plus, make_hooks_and_matrices, compute_mean_activations
+from .utils import (
+    _maybe_contract_grouped_query_tensor,
+    tokenize_plus,
+    make_hooks_and_matrices,
+    compute_mean_activations,
+)
 from .graph import Graph, AttentionNode
+from .model_adapter import get_model_device, prepare_model_for_eap, validate_model_for_eap
+
+HookedTransformer = Any
 
 
 def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoader, 
                    metrics: Union[Callable[[Tensor],Tensor], List[Callable[[Tensor], Tensor]]], 
                    quiet=False, intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
-                   intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True) -> Union[torch.Tensor, List[torch.Tensor]]:
+                   intervention_dataloader: Optional[DataLoader]=None, skip_clean:bool=True,
+                   auto_enable_bridge_compat: bool=True,
+                   bridge_compat_kwargs: Optional[dict]=None) -> Union[torch.Tensor, List[torch.Tensor]]:
     """Evaluate a circuit (i.e. a graph where only some nodes are false, probably created by calling graph.apply_threshold). You probably want to prune 
         beforehand to make sure your circuit is valid.
 
@@ -32,9 +41,12 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of faithfulness scores; if a list, each list entry 
             corresponds to a metric in the input list
     """
-    assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
-    if model.cfg.n_key_value_heads is not None:
-        assert model.cfg.ungroup_grouped_query_attention, "Model must be configured to ungroup grouped attention (model.cfg.ungroup_grouped_attention)"
+    model = prepare_model_for_eap(
+        model,
+        auto_enable_bridge_compat=auto_enable_bridge_compat,
+        compatibility_mode_kwargs=bridge_compat_kwargs,
+    )
+    validate_model_for_eap(model)
         
     assert intervention in ['patching', 'zero', 'mean', 'mean-positional'], f"Invalid intervention: {intervention}"
     
@@ -50,11 +62,11 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
     graph.prune()
 
     # Construct a matrix that indicates which edges are in the graph
-    in_graph_matrix = graph.in_graph.to(device=model.cfg.device, dtype=model.cfg.dtype)
+    in_graph_matrix = graph.in_graph.to(device=get_model_device(model), dtype=model.cfg.dtype)
     
     # same thing but for neurons
     if graph.neurons_in_graph is not None:
-        neuron_matrix = graph.neurons_in_graph.to(device=model.cfg.device, dtype=model.cfg.dtype)
+        neuron_matrix = graph.neurons_in_graph.to(device=get_model_device(model), dtype=model.cfg.dtype)
 
         # If an edge is in the graph, but not all its neurons are, we need to update that edge anyway
         node_fully_in_graph = (neuron_matrix.sum(-1) == model.cfg.d_model).to(model.cfg.dtype)
@@ -70,7 +82,7 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
         
     if model.cfg.use_normalization_before_and_after:
         # If the model also normalizes the outputs of attention heads, we'll need to take that into account when evaluating the graph.
-        attention_head_mask = torch.zeros((graph.n_forward, model.cfg.n_layers), device='cuda', dtype=model.cfg.dtype)
+        attention_head_mask = torch.zeros((graph.n_forward, model.cfg.n_layers), device=get_model_device(model), dtype=model.cfg.dtype)
         for node in graph.nodes.values():
             if isinstance(node, AttentionNode):
                 attention_head_mask[graph.forward_index(node), node.layer] = 1
@@ -150,6 +162,12 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                 else:
                     update = einsum(activation_differences[:, :, :len(in_graph_vector)], in_graph_vector,
                                     'batch pos previous hidden, previous ... -> batch pos ... hidden')
+            if (
+                activations.ndim >= 4
+                and update.ndim >= 4
+                and activations.shape[2] != update.shape[2]
+            ):
+                update = _maybe_contract_grouped_query_tensor(model, update)
             activations += update
             return activations
         return input_construction_hook
@@ -234,7 +252,8 @@ def evaluate_graph(model: HookedTransformer, graph: Graph, dataloader: DataLoade
 
 
 def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: List[Callable[[Tensor], Tensor]], 
-                      run_corrupted=False, quiet=False) -> Union[torch.Tensor, List[torch.Tensor]]:
+                      run_corrupted=False, quiet=False, auto_enable_bridge_compat: bool=True,
+                      bridge_compat_kwargs: Optional[dict]=None) -> Union[torch.Tensor, List[torch.Tensor]]:
     """Evaluates the model on the given dataloader, without any intervention. This is useful for computing the baseline performance of the model.
 
     Args:
@@ -246,6 +265,12 @@ def evaluate_baseline(model: HookedTransformer, dataloader:DataLoader, metrics: 
     Returns:
         Union[torch.Tensor, List[torch.Tensor]]: A tensor (or list thereof) of performance scores; if a list, each list entry corresponds to a metric in the input list
     """
+    model = prepare_model_for_eap(
+        model,
+        auto_enable_bridge_compat=auto_enable_bridge_compat,
+        compatibility_mode_kwargs=bridge_compat_kwargs,
+    )
+
     if not isinstance(metrics, list):
         metrics = [metrics]
     

@@ -1,13 +1,13 @@
-from typing import List, Dict, Union, Tuple, Literal, Optional, Set
+from typing import Any, List, Dict, Union, Tuple, Literal, Optional, Set
 import json
 import heapq
 
 from einops import einsum
 import torch
-from transformer_lens import HookedTransformer, HookedTransformerConfig
 import numpy as np
 
 from .visualization import get_color, generate_random_color
+from .model_adapter import cfg_get
 
 class Node:
     """
@@ -188,6 +188,23 @@ class GraphConfig(dict):
     def __init__(self, *args, **kwargs):
         super(GraphConfig, self).__init__(*args, **kwargs)
         self.__dict__ = self
+
+
+def _config_source(model_or_config: Any) -> Any:
+    if isinstance(model_or_config, dict):
+        return model_or_config
+    if hasattr(model_or_config, "cfg"):
+        return model_or_config.cfg
+    return model_or_config
+
+
+def _is_present(cfg: Any, key: str) -> bool:
+    try:
+        cfg_get(cfg, key)
+        return True
+    except AttributeError:
+        return False
+
 
 class Graph:
     """
@@ -600,32 +617,75 @@ class Graph:
             
 
     @classmethod
-    def from_model(cls, model_or_config: Union[HookedTransformer,HookedTransformerConfig, Dict], neuron_level: bool = False, node_scores: bool = False) -> 'Graph':
-        """Instantiate a Graph object from a HookedTransformer or HookedTransformerConfig object, or a similar Dict. The neuron_level parameter determines whether the graph should be neuron-level or not, while the node_scores parameter determines whether the graph should have node scores or not. If you don't have scores for all nodes / neurons, just don't set them (default is torch.nan). Any node/neuron without a real score will always be kept in the graph when doing node/neuron-level topn (but might be eliminated by another level's topn, e.g. a node with no neuron scores might be removed if it loses all edges)
+    def from_model(cls, model_or_config: Any, neuron_level: bool = False, node_scores: bool = False) -> 'Graph':
+        """Instantiate a Graph from a model, model config, or config mapping."""
+        return cls.from_config(_config_source(model_or_config), neuron_level=neuron_level, node_scores=node_scores)
 
-        Args:
-            model_or_config (Union[HookedTransformer,HookedTransformerConfig, Dict]): A config object; it needs to contain n_layers, n_heads, parallel_attn_mlp, and d_model.
-            neuron_level (bool, optional): _description_. Defaults to False.
-            node_scores (bool, optional): _description_. Defaults to False.
-
-        Raises:
-            ValueError: If you pass an invalid type for model_or_config
-
-        Returns:
-            _type_: a Graph
-        """
+    @classmethod
+    def from_config(cls, config: Any, neuron_level: bool = False, node_scores: bool = False) -> 'Graph':
+        """Instantiate a Graph from any HookedTransformer/TransformerBridge-like config."""
         graph = Graph()
         graph.cfg = GraphConfig()
-        if isinstance(model_or_config, HookedTransformer):
-            cfg = model_or_config.cfg
-            graph.cfg.update({'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
-        elif isinstance(model_or_config, HookedTransformerConfig):
-            cfg = model_or_config
-            graph.cfg.update({'n_layers': cfg.n_layers, 'n_heads': cfg.n_heads, 'parallel_attn_mlp':cfg.parallel_attn_mlp, 'd_model': cfg.d_model})
-        elif isinstance(model_or_config, dict):
-            graph.cfg.update(model_or_config)
-        else:
-            raise ValueError(f"Invalid input type: {type(model_or_config)}")
+
+        cfg = _config_source(config)
+        try:
+            n_layers = int(cfg_get(cfg, "n_layers"))
+            n_heads = int(cfg_get(cfg, "n_heads"))
+            d_model = int(cfg_get(cfg, "d_model"))
+        except AttributeError as e:
+            raise ValueError(
+                "Graph config must define n_layers, n_heads, and d_model"
+            ) from e
+
+        if n_layers <= 0:
+            raise ValueError(f"n_layers must be positive, got {n_layers}")
+        if n_heads <= 0:
+            raise ValueError(f"n_heads must be positive, got {n_heads}")
+        if d_model <= 0:
+            raise ValueError(f"d_model must be positive, got {d_model}")
+
+        unsupported = []
+        if cfg_get(cfg, "is_stateful", False):
+            unsupported.append("stateful/SSM-style models")
+        if cfg_get(cfg, "is_multimodal", False):
+            unsupported.append("multimodal models")
+        if cfg_get(cfg, "is_encoder_decoder", False):
+            unsupported.append("encoder-decoder models")
+        if cfg_get(cfg, "encoder_only", False):
+            unsupported.append("encoder-only models")
+        attention_dir = cfg_get(cfg, "attention_dir", None)
+        if attention_dir is not None and attention_dir != "causal":
+            unsupported.append(f"non-causal attention_dir={attention_dir!r}")
+        if cfg_get(cfg, "attn_only", False):
+            unsupported.append("attention-only models without per-layer MLP nodes")
+
+        n_key_value_heads = cfg_get(cfg, "n_key_value_heads", None)
+        if n_key_value_heads is not None and n_key_value_heads != n_heads:
+            if not cfg_get(cfg, "ungroup_grouped_query_attention", False):
+                unsupported.append(
+                    "grouped-query attention unless ungroup_grouped_query_attention=True"
+                )
+
+        if unsupported:
+            raise NotImplementedError(
+                "EAP Graph.from_config v1 only supports decoder-only transformer "
+                f"blocks with one attention and one MLP per layer; unsupported: {', '.join(unsupported)}"
+            )
+
+        if isinstance(cfg, dict):
+            graph.cfg.update(cfg)
+
+        graph.cfg.update(
+            {
+                "n_layers": n_layers,
+                "n_heads": n_heads,
+                "parallel_attn_mlp": bool(cfg_get(cfg, "parallel_attn_mlp", False)),
+                "d_model": d_model,
+            }
+        )
+        for optional_key in ["n_key_value_heads", "ungroup_grouped_query_attention"]:
+            if _is_present(cfg, optional_key):
+                graph.cfg[optional_key] = cfg_get(cfg, optional_key)
             
         graph.n_forward = 1 + graph.cfg['n_layers'] * (graph.cfg['n_heads'] + 1)
         graph.n_backward = graph.cfg['n_layers'] * (3 * graph.cfg['n_heads'] + 1) + 1

@@ -1,17 +1,19 @@
-from typing import Callable, Union, Optional, Literal
+from typing import Any, Callable, Union, Optional, Literal
 from functools import partial
 
 import torch
 from torch.utils.data import DataLoader
 from torch import Tensor
-from transformer_lens import HookedTransformer
-from transformer_lens.hook_points import HookPoint
 from tqdm import tqdm
 from einops import einsum
 
 from .graph import Graph
 from .utils import tokenize_plus, compute_mean_activations
 from .evaluate import evaluate_baseline, evaluate_graph
+from .model_adapter import get_model_device, prepare_model_for_eap, validate_model_for_eap
+
+HookedTransformer = Any
+HookPoint = Any
 
 
 def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:int , n_pos:int, scores: Optional[Tensor], neuron:bool=False):
@@ -30,7 +32,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
         while the second set will subtract out the activations they are run on (run these on clean input). 
         The third set of hooks will compute the gradients and update the scores matrix that you passed in. 
     """
-    activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
+    activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
 
     fwd_hooks_clean = []
     fwd_hooks_corrupted = []
@@ -145,9 +147,9 @@ def get_scores_eap(model: HookedTransformer, graph: Graph, dataloader:DataLoader
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
     if neuron:
-        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
     else:
-        scores = torch.zeros((graph.n_forward), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward), device=get_model_device(model), dtype=model.cfg.dtype)
 
     if 'mean' in intervention:
         assert intervention_dataloader is not None, "Intervention dataloader must be provided for mean interventions"
@@ -205,9 +207,9 @@ def get_scores_eap_ig(model: HookedTransformer, graph: Graph, dataloader: DataLo
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
     if neuron:
-        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
     else:
-        scores = torch.zeros((graph.n_forward), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward), device=get_model_device(model), dtype=model.cfg.dtype)
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -267,9 +269,9 @@ def get_scores_ig_activations(model: HookedTransformer, graph: Graph, dataloader
             means = means.unsqueeze(0)
 
     if neuron:
-        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
     else:
-        scores = torch.zeros((graph.n_forward), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward), device=get_model_device(model), dtype=model.cfg.dtype)
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -345,9 +347,9 @@ def get_scores_clean_corrupted(model: HookedTransformer, graph: Graph, dataloade
         Tensor: a [src_nodes, dst_nodes] tensor of scores for each edge
     """
     if neuron:
-        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward, graph.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
     else:
-        scores = torch.zeros((graph.n_forward), device='cuda', dtype=model.cfg.dtype)    
+        scores = torch.zeros((graph.n_forward), device=get_model_device(model), dtype=model.cfg.dtype)
     
     total_items = 0
     dataloader = dataloader if quiet else tqdm(dataloader)
@@ -392,12 +394,14 @@ def attribute_node(model: HookedTransformer, graph: Graph, dataloader: DataLoade
                    method: Literal['EAP', 'EAP-IG-inputs', 'EAP-IG-activations', 'exact'], 
                    intervention: Literal['patching', 'zero', 'mean','mean-positional']='patching', 
                    aggregation='sum', ig_steps: Optional[int]=None, intervention_dataloader: Optional[DataLoader]=None, 
-                   quiet:bool=False, neuron:bool=False):
-    assert model.cfg.use_attn_result, "Model must be configured to use attention result (model.cfg.use_attn_result)"
-    assert model.cfg.use_split_qkv_input, "Model must be configured to use split qkv inputs (model.cfg.use_split_qkv_input)"
-    assert model.cfg.use_hook_mlp_in, "Model must be configured to use hook MLP in (model.cfg.use_hook_mlp_in)"
-    if model.cfg.n_key_value_heads is not None:
-        assert model.cfg.ungroup_grouped_query_attention, "Model must be configured to ungroup grouped attention (model.cfg.ungroup_grouped_attention)"
+                   quiet:bool=False, neuron:bool=False, auto_enable_bridge_compat: bool=True,
+                   bridge_compat_kwargs: Optional[dict]=None):
+    model = prepare_model_for_eap(
+        model,
+        auto_enable_bridge_compat=auto_enable_bridge_compat,
+        compatibility_mode_kwargs=bridge_compat_kwargs,
+    )
+    validate_model_for_eap(model)
     
     if aggregation not in allowed_aggregations:
         raise ValueError(f'aggregation must be in {allowed_aggregations}, but got {aggregation}')

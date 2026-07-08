@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 from functools import partial
 import pickle
 
@@ -6,11 +6,117 @@ from tqdm import tqdm
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
-from transformer_lens import HookedTransformer
-from transformer_lens.utils import get_attention_mask
 from einops import einsum
 
 from .graph import Graph, AttentionNode, LogitNode
+from .model_adapter import cfg_get, get_model_device, prepare_model_for_eap
+
+HookedTransformer = Any
+
+
+def _maybe_expand_grouped_query_tensor(model: HookedTransformer, tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.ndim < 4:
+        return tensor
+
+    cfg = getattr(model, "cfg", None)
+    if cfg is None or not cfg_get(cfg, "ungroup_grouped_query_attention", False):
+        return tensor
+
+    n_heads = cfg_get(cfg, "n_heads", None)
+    n_key_value_heads = cfg_get(cfg, "n_key_value_heads", None)
+    if (
+        n_heads is None
+        or n_key_value_heads is None
+        or n_key_value_heads == n_heads
+        or tensor.size(2) != n_key_value_heads
+        or n_heads % n_key_value_heads != 0
+    ):
+        return tensor
+
+    return tensor.repeat_interleave(n_heads // n_key_value_heads, dim=2)
+
+
+def _maybe_contract_grouped_query_tensor(model: HookedTransformer, tensor: torch.Tensor) -> torch.Tensor:
+    if tensor.ndim < 4:
+        return tensor
+
+    cfg = getattr(model, "cfg", None)
+    if cfg is None or not cfg_get(cfg, "ungroup_grouped_query_attention", False):
+        return tensor
+
+    n_heads = cfg_get(cfg, "n_heads", None)
+    n_key_value_heads = cfg_get(cfg, "n_key_value_heads", None)
+    if (
+        n_heads is None
+        or n_key_value_heads is None
+        or n_key_value_heads == n_heads
+        or tensor.size(2) != n_heads
+        or n_heads % n_key_value_heads != 0
+    ):
+        return tensor
+
+    grouped_shape = (
+        *tensor.shape[:2],
+        n_key_value_heads,
+        n_heads // n_key_value_heads,
+        *tensor.shape[3:],
+    )
+    return tensor.reshape(grouped_shape).mean(dim=3)
+
+
+def _get_pad_token_id(tokenizer: Any) -> Optional[int]:
+    if tokenizer is None:
+        return None
+    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+    if pad_token_id is not None:
+        return pad_token_id
+    pad_token = getattr(tokenizer, "pad_token", None)
+    if pad_token is None:
+        return None
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if convert_tokens_to_ids is None:
+        return None
+    converted = convert_tokens_to_ids(pad_token)
+    return converted if isinstance(converted, int) and converted >= 0 else None
+
+
+def _attention_mask_from_tokens(
+    tokenizer: Any,
+    tokens: torch.Tensor,
+    prepend_bos: bool = True,
+) -> torch.Tensor:
+    """Match TransformerLens' legacy get_attention_mask semantics.
+
+    Right padding masks only the trailing pad run; left padding masks only the
+    leading pad run and preserves TL's BOS/pad collision special case.
+    """
+    pad_token_id = _get_pad_token_id(tokenizer)
+    if pad_token_id is None:
+        return torch.ones_like(tokens, dtype=torch.long, device=tokens.device)
+    is_not_pad_token = tokens.ne(pad_token_id)
+    attention_mask = torch.ones_like(tokens, dtype=torch.long, device=tokens.device)
+    padding_side = getattr(tokenizer, "padding_side", "right")
+
+    if padding_side == "right":
+        reversed_non_pad_cumsum = torch.cumsum(
+            is_not_pad_token.flip(-1).to(dtype=torch.long),
+            dim=-1,
+        ).flip(-1)
+        attention_mask[reversed_non_pad_cumsum == 0] = 0
+    else:
+        non_pad_cumsum = torch.cumsum(is_not_pad_token.to(dtype=torch.long), dim=-1)
+        is_leading_pad = non_pad_cumsum == 0
+        attention_mask[is_leading_pad] = 0
+
+        bos_token_id = getattr(tokenizer, "bos_token_id", None)
+        if prepend_bos and bos_token_id == pad_token_id:
+            pad_bos_positions = is_leading_pad.sum(-1) - 1
+            attention_mask[
+                torch.arange(attention_mask.shape[0], device=tokens.device),
+                pad_bos_positions,
+            ] = 1
+
+    return attention_mask
 
 
 def tokenize_plus(model: HookedTransformer, inputs: List[str], max_length: Optional[int] = None):
@@ -34,7 +140,7 @@ def tokenize_plus(model: HookedTransformer, inputs: List[str], max_length: Optio
     tokens = model.to_tokens(inputs, prepend_bos=True, padding_side='right', truncate=(max_length is not None))
     if max_length is not None:
         model.cfg.n_ctx = old_n_ctx
-    attention_mask = get_attention_mask(model.tokenizer, tokens, True)
+    attention_mask = _attention_mask_from_tokens(model.tokenizer, tokens, prepend_bos=True)
     input_lengths = attention_mask.sum(1)
     n_pos = attention_mask.size(1)
     return tokens, attention_mask, input_lengths, n_pos
@@ -54,9 +160,9 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
     """
     separate_activations = model.cfg.use_normalization_before_and_after and scores is None
     if separate_activations:
-        activation_difference = torch.zeros((2, batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
+        activation_difference = torch.zeros((2, batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
     else:
-        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=model.cfg.device, dtype=model.cfg.dtype)
+        activation_difference = torch.zeros((batch_size, n_pos, graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
 
 
     fwd_hooks_clean = []
@@ -97,6 +203,7 @@ def make_hooks_and_matrices(model: HookedTransformer, graph: Graph, batch_size:i
         """
         grads = gradients.detach()
         try:
+            grads = _maybe_expand_grouped_query_tensor(model, grads)
             if grads.ndim == 3:
                 grads = grads.unsqueeze(2)
             s = einsum(activation_difference[:, :, :prev_index], grads,'batch pos forward hidden, batch pos backward hidden -> forward backward')
@@ -142,6 +249,8 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
     """
     Compute the mean activations of a graph's nodes over a dataset.
     """
+    model = prepare_model_for_eap(model)
+
     def activation_hook(index, activations, hook, means=None, input_lengths=None):
         # defining a hook that will fill up our means tensor. Means is of shape
         # (n_pos, graph.n_forward, model.cfg.d_model) if per_position is True, otherwise
@@ -191,9 +300,9 @@ def compute_mean_activations(model: HookedTransformer, graph: Graph, dataloader:
         if not means_initialized:
             # here is where we store the means
             if per_position:
-                means = torch.zeros((n_pos, graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
+                means = torch.zeros((n_pos, graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
             else:
-                means = torch.zeros((graph.n_forward, model.cfg.d_model), device='cuda', dtype=model.cfg.dtype)
+                means = torch.zeros((graph.n_forward, model.cfg.d_model), device=get_model_device(model), dtype=model.cfg.dtype)
             means_initialized = True
 
         if per_position:
